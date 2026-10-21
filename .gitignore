@@ -65,3 +65,6 @@ env/
 
 # EDA caches (derived match data, never commit)
 analysis/cache/
+
+# possession pipeline cache (derived match data, never commit)
+cache/

@@ -23,7 +23,11 @@
       "PowerShell(gc *data*)",
       "PowerShell(cat *data*)",
       "PowerShell(type *data*)",
-      "PowerShell(Select-String *data*)"
+      "PowerShell(Select-String *data*)",
+      "Read(./cache/**)",
+      "Bash(cat *cache/*)",
+      "Bash(head *cache/*)",
+      "Bash(tail *cache/*)"
     ]
   }
 }
