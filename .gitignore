@@ -68,3 +68,6 @@ analysis/cache/
 
 # possession pipeline cache (derived match data, never commit)
 cache/
+
+# hand labels from the labelling tool (validation GT derived from the match video)
+labels/

@@ -27,7 +27,12 @@
       "Read(./cache/**)",
       "Bash(cat *cache/*)",
       "Bash(head *cache/*)",
-      "Bash(tail *cache/*)"
+      "Bash(tail *cache/*)",
+      "Read(./labels/**)",
+      "Bash(cat *labels/*)",
+      "Bash(head *labels/*)",
+      "Bash(tail *labels/*)",
+      "PowerShell(Get-Content *labels*)"
     ]
   }
 }
