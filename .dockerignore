@@ -1,0 +1,4 @@
+# The build only needs docker/. Everything else is bind-mounted at runtime.
+# Excluding data/ is critical: it is ~19 GB and must never end up inside an image.
+*
+!docker/

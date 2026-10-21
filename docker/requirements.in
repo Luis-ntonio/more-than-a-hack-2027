@@ -1,0 +1,11 @@
+# Top-level dependencies of the team image. The exact, fully resolved set lives in
+# requirements.lock.txt (regenerate with: docker compose run --rm dev pip freeze > docker/requirements.lock.txt)
+numpy==2.2.6
+pandas==2.2.3
+scipy==1.15.3
+scikit-learn==1.6.1
+lightgbm==4.6.0
+matplotlib==3.10.3
+kloppy==3.18.0
+opencv-python-headless==4.11.0.86
+jupyterlab==4.4.3
