@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./data/**)",
+      "Read(./analysis/cache/**)",
+      "Read(./evaluation/reports/**)",
+      "Bash(cat *data/*)",
+      "Bash(head *data/*)",
+      "Bash(tail *data/*)",
+      "Bash(less *data/*)",
+      "Bash(more *data/*)",
+      "Bash(sed *data/*)",
+      "Bash(awk *data/*)",
+      "Bash(grep *data/*)",
+      "Bash(cut *data/*)",
+      "Bash(strings *data/*)",
+      "Bash(xxd *data/*)",
+      "Bash(od *data/*)",
+      "Bash(cat *analysis/cache/*)",
+      "Bash(head *analysis/cache/*)",
+      "Bash(tail *analysis/cache/*)",
+      "PowerShell(Get-Content *data*)",
+      "PowerShell(gc *data*)",
+      "PowerShell(cat *data*)",
+      "PowerShell(type *data*)",
+      "PowerShell(Select-String *data*)"
+    ]
+  }
+}
