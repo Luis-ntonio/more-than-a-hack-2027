@@ -32,6 +32,41 @@ de pulsaciones.
 *Comparar con GT* y usa *Mostrar GT* para ver en qué difiere vuestro criterio del de la organización.
 La GT manda (ver `CHALLENGE.md`).
 
+## Corregir sobre un modelo en vez de empezar de cero
+
+1. En la barra superior, elige **Modelo**:
+   - `v1` para los primeros bloques;
+   - `prelabel` en cuanto el pre-etiquetador gane a v1 (ver más abajo).
+
+   Su predicción aparece como una franja extra bajo la tuya en las dos líneas de tiempo (`M` la
+   muestra u oculta).
+2. Pulsa **Partir de la predicción**. Sus cambios se copian al bloque. Si el bloque ya tenía
+   etiquetas, pide un segundo clic para no borrar trabajo por accidente.
+3. Revisa los cambios de uno en uno:
+   - `]` salta al siguiente.
+   - Mira el clip de contexto.
+   - Si está bien, sigue; si está desplazado, muévelo con `Alt`+flechas; si sobra, bórralo con
+     `Supr`; si falta uno, colócate en el frame y pulsa `H`, `A` o `D`.
+   - Entre cambios, reproduce a 1–2× para detectar posesiones que el modelo se saltó.
+4. Marca **Bloque terminado** y sube el archivo al repo de etiquetas.
+
+El bloque queda marcado como "desde v1" (o desde el modelo que hayas usado). Corregir sobre un
+modelo arrastra sus sesgos: los casos dudosos se tienden a dejar como los marcó. Por eso conviene
+etiquetar **2–3 bloques desde cero** y reservarlos para validar
+(`labeler.export --exclude-seeded`).
+
+## Pre-etiquetador que aprende de vuestros bloques
+
+```bash
+docker compose run --rm dev python -m possession.prelabel
+```
+
+- Entrena con la GT pública más todos los bloques marcados como terminados, y escribe
+  `evaluation/results/prelabel.csv`. Aparece en el selector de modelos sin reiniciar nada.
+- Volved a ejecutarlo cada vez que terminéis uno o dos bloques.
+- Imprime, por bloque, cuántas correcciones habrían hecho falta con él y con v1 (añadir, mover o
+  borrar cambios). Cuando el total del pre-etiquetador sea claramente menor, pasad a usarlo.
+
 ## Usar las etiquetas para evaluar
 
 ```bash

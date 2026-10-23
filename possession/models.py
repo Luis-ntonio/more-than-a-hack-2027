@@ -117,9 +117,13 @@ def dead_probability(features, p=V1_PARAMS):
 
 
 def v1(features, n_frames, p=V1_PARAMS):
-    logit = team_logit(features, p)
-    p_dead = np.clip(dead_probability(features, p), 1e-6, 1 - 1e-6)
-    p_home = np.clip(_sigmoid(logit), 1e-6, 1 - 1e-6)
+    return decode(dead_probability(features, p), _sigmoid(team_logit(features, p)), n_frames, p)
+
+
+def decode(p_dead, p_home, n_frames, p=V1_PARAMS):
+    """Per-frame P(dead) and P(home | alive) -> labels via the 3-state HMM, per half from kickoff."""
+    p_dead = np.clip(p_dead, 1e-6, 1 - 1e-6)
+    p_home = np.clip(p_home, 1e-6, 1 - 1e-6)
     log_emission = np.stack([
         np.log1p(-p_dead) + np.log(p_home),
         np.log1p(-p_dead) + np.log1p(-p_home),
