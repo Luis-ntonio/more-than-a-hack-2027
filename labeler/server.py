@@ -29,6 +29,7 @@ from possession.io import FPS, graded_blocks, kickoff_frames  # noqa: E402
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 LABELS_DIR = os.path.join(ROOT, "labels")
 PUBLIC_GT = os.path.join(ROOT, "evaluation", "gt", "{}_possession_gt_public.csv".format(GAME))
+PREDICTIONS_DIR = os.path.join(ROOT, "evaluation", "results")  # make_submission writes here
 
 BLOCK_FRAMES = 5 * 60 * FPS
 MIN_TAIL_FRAMES = 60 * FPS      # a leftover shorter than this is merged into the previous block
@@ -102,8 +103,16 @@ def validate(doc, blocks_by_id):
     return None
 
 
+def changes_of(labels, first):
+    """Dense labels for a window starting at `first` -> change points [frame, label], X dropped."""
+    edges = np.flatnonzero(labels[1:] != labels[:-1]) + 1
+    return [[first + int(i), str(labels[i])] for i in np.concatenate(([0], edges))
+            if labels[i] in LABELS]
+
+
 class App:
     def __init__(self):
+        self._predictions = {}
         self.video = video_path()
         self.gt, public_range = _public_gt()
         self.blocks = build_blocks(public_range)
@@ -129,9 +138,29 @@ class App:
                 rows.setdefault(match.group(1), []).append({
                     "annotator": match.group(2), "done": bool(doc.get("done")),
                     "coverage": round(float((labels != "X").mean()), 4),
-                    "updated": doc.get("updated"),
+                    "updated": doc.get("updated"), "seeded_from": doc.get("seeded_from", ""),
                 })
         return rows
+
+    def prediction_names(self):
+        if not os.path.isdir(PREDICTIONS_DIR):
+            return []
+        return sorted(name[:-len(".csv")] for name in os.listdir(PREDICTIONS_DIR)
+                      if name.endswith(".csv"))
+
+    def prediction(self, name, block_id):
+        """A model's labels on one block, as change points. Reloaded when the CSV changes."""
+        block = self.blocks_by_id.get(block_id)
+        if block is None or name not in self.prediction_names():
+            return None
+        path = os.path.join(PREDICTIONS_DIR, name + ".csv")
+        mtime = os.path.getmtime(path)
+        if name not in self._predictions or self._predictions[name][0] != mtime:
+            frame = pm.read_label_csv(path)
+            labels = np.array([str(v).strip().upper() for v in frame["label"].values], dtype="<U1")
+            self._predictions[name] = (mtime, labels)
+        labels = self._predictions[name][1][block["first"]:block["last"] + 1]
+        return changes_of(labels, block["first"])
 
     def compare(self, block_id, annotator, reveal):
         """Score one annotator's labels on the public block against the official GT."""
@@ -154,10 +183,7 @@ class App:
             "spell_f1_mean", "macro_f1", "alive_dead_f1", "n_gt_spells", "n_pred_spells",
             "n_graded", "n_abstain_on_graded")}
         if reveal:
-            window = np.array(pm.LABELS)[self.gt[first:last + 1]]
-            edges = np.flatnonzero(window[1:] != window[:-1]) + 1
-            out["gt_changes"] = [[first + int(i), str(window[i])]
-                                 for i in np.concatenate(([0], edges)) if window[i] != "X"]
+            out["gt_changes"] = changes_of(np.array(pm.LABELS)[self.gt[first:last + 1]], first)
         return out
 
 
@@ -262,6 +288,13 @@ class Handler(BaseHTTPRequestHandler):
                                    "done": False, "notes": ""})
             with open(path) as handle:
                 return self._json(json.load(handle))
+        if url.path == "/api/predictions":
+            return self._json(self.app.prediction_names())
+        if url.path == "/api/prediction":
+            changes = self.app.prediction(query.get("name"), query.get("block"))
+            if changes is None:
+                return self._error(HTTPStatus.BAD_REQUEST, "unknown prediction or block")
+            return self._json(changes)
         if url.path == "/api/compare":
             result = self.app.compare(query.get("block"), query.get("annotator", ""),
                                       query.get("reveal") == "1")
@@ -286,6 +319,9 @@ class Handler(BaseHTTPRequestHandler):
             "first": block["first"], "last": block["last"],
             "changes": doc["changes"], "done": bool(doc.get("done")),
             "notes": str(doc.get("notes", ""))[:5000],
+            # which model's output the annotator started from, if any: such a block is anchored
+            # to that model, so export can keep it out of validation (--exclude-seeded)
+            "seeded_from": str(doc.get("seeded_from", ""))[:64],
             "updated": datetime.datetime.now().isoformat(timespec="seconds"),
         }
         os.makedirs(LABELS_DIR, exist_ok=True)

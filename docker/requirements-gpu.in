@@ -1,0 +1,5 @@
+# On top of requirements.in (torch comes from the base image: 2.5.1 + CUDA 12.4).
+ultralytics==8.3.40
+supervision==0.25.1
+transformers==4.53.2
+gdown==5.2.0

@@ -15,6 +15,9 @@
   <label class="field">Bloque
     <select id="block"></select>
   </label>
+  <label class="field">Modelo
+    <select id="model"><option value="">(ninguno)</option></select>
+  </label>
   <label class="toggle"><input type="checkbox" id="done"> Bloque terminado</label>
   <div class="spacer"></div>
   <div id="progress" class="pill">0 % etiquetado</div>
@@ -40,11 +43,11 @@
     <div class="timelines">
       <div class="tl-row">
         <span class="tl-label">bloque</span>
-        <canvas id="overview" height="44"></canvas>
+        <canvas id="overview" height="56"></canvas>
       </div>
       <div class="tl-row">
         <span class="tl-label">zoom <span id="zoomtxt" class="muted"></span></span>
-        <canvas id="zoom" height="64"></canvas>
+        <canvas id="zoom" height="80"></canvas>
       </div>
     </div>
 
@@ -64,6 +67,8 @@
       <button data-act="delete" title="Supr">Borrar cambio</button>
       <button data-act="undo" title="Ctrl+Z">Deshacer</button>
       <button data-act="nextgap" title="N">Siguiente sin etiquetar</button>
+      <button data-act="seed" id="seedbtn" title="Copia la predicción del modelo al bloque para corregirla">Partir de la predicción</button>
+      <span id="seeded" class="muted small"></span>
     </div>
   </section>
 
@@ -119,6 +124,7 @@
         <tr><td><kbd>N</kbd></td><td>saltar al siguiente frame sin etiquetar</td></tr>
         <tr><td><kbd>C</kbd></td><td>repetir el clip de contexto desde el inicio</td></tr>
         <tr><td><kbd>-</kbd> <kbd>+</kbd></td><td>velocidad de reproducción</td></tr>
+        <tr><td><kbd>M</kbd></td><td>mostrar / ocultar la pista del modelo elegido</td></tr>
         <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>deshacer · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> rehacer</td></tr>
       </table>
       <ul class="small criteria">

@@ -71,3 +71,6 @@ cache/
 
 # hand labels from the labelling tool (validation GT derived from the match video)
 labels/
+
+# model weights (downloaded by enrich/download_models.sh)
+models/

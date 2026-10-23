@@ -28,11 +28,20 @@ def _track_teams(meta_path):
     return np.array([HOME if t == team_ids[0] else AWAY for t in slots], dtype=np.int8)
 
 
-def load_atd(game=GAME):
+def load_atd(game=GAME, enriched=False):
     """Tactical ATD as arrays: players (n, slots, 3) x/y/speed, ball (n, 2) x/y, team (slots,).
 
-    Coordinates stay normalised 0-1 here; features.py converts to metres.
+    Coordinates stay normalised 0-1 here; features.py converts to metres. enriched=True loads the
+    copy whose ball gaps were filled from the video (enrich/merge.py), with ball_source and
+    ball_conf added.
     """
+    if enriched:
+        path = os.path.join(CACHE_DIR, "enriched", "{}_atd_enriched.npz".format(game))
+        if not os.path.isfile(path):
+            raise SystemExit("missing {}: run python -m enrich.merge".format(path))
+        z = np.load(path)
+        return {key: z[key] for key in ("players", "ball", "team", "ball_source", "ball_conf")}
+
     cache = os.path.join(CACHE_DIR, "{}_atd_tactical.npz".format(game))
     if os.path.isfile(cache):
         z = np.load(cache)

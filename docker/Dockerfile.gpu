@@ -1,0 +1,26 @@
+# GPU image: the team image's pinned stack plus PyTorch/CUDA for ball detection (Roboflow sports
+# YOLO weights) and video models (V-JEPA 2). Same mounts and env as the CPU image.
+#   docker compose run --rm gpu python -m enrich.detect_ball --help
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=0 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    MTAH_DATA_DIR=/workspace/data \
+    CUBLAS_WORKSPACE_CONFIG=:4096:8 \
+    YOLO_OFFLINE=1 \
+    YOLO_CONFIG_DIR=/tmp/ultralytics
+
+# libgl1/libglib2.0-0: ultralytics pulls opencv-python, which links against them.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 ffmpeg git libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/requirements.in docker/requirements-gpu.in /tmp/req/
+RUN grep -v -e '^jupyterlab' /tmp/req/requirements.in > /tmp/req/base.in \
+    && pip install -r /tmp/req/base.in -r /tmp/req/requirements-gpu.in
+
+WORKDIR /workspace
+CMD ["bash"]

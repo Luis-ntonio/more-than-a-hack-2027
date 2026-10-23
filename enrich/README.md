@@ -1,0 +1,79 @@
+# Enriquecimiento del balón con visión (Roboflow sports)
+
+El ATD pierde el balón en el 41 % de los frames calificados. Este paquete lo busca en el vídeo
+táctico con el detector YOLO de [roboflow/sports](https://github.com/roboflow/sports) (MIT) y
+rellena esos huecos en una **copia nueva** del ATD. Los datos originales y la caché existente no se
+tocan.
+
+Todo corre en local, en la imagen GPU. Ningún frame sale de la máquina.
+
+```bash
+docker compose build gpu                                              # una vez (~11 GB)
+docker compose run --rm gpu bash enrich/download_models.sh            # pesos -> models/ (gitignored)
+
+docker compose run --rm gpu python -m enrich.detect_ball --mode calibrate --diagnose   # ~3 min
+docker compose run --rm gpu python -m enrich.detect_ball --mode missing               # ~75 min
+docker compose run --rm gpu python -m enrich.detect_ball --mode windows               # ~6 min
+docker compose run --rm dev python -m enrich.merge --simulate                         # elegir parámetros
+docker compose run --rm dev python -m enrich.merge                                    # escribe la copia
+```
+
+Uso en el código: `possession.io.load_atd(enriched=True)`. Devuelve los mismos arrays que el ATD,
+más `ball_source` (0 ninguno, 1 ATD, 2 detector, 3 interpolado) y `ball_conf`.
+
+## Archivos (todos en `cache/enriched/`, gitignored: son datos derivados del partido)
+
+| archivo | contenido |
+|---|---|
+| `<game>_ball_detections.npz` | top-5 candidatos por frame sin balón en el ATD: píxel, confianza, tamaño |
+| `<game>_ball_detections_windows.npz` | lo mismo, en tramos donde el ATD sí tiene balón (para simular) |
+| `<game>_atd_enriched.npz` | ATD con los huecos rellenados |
+
+## Qué se ha medido
+
+**Calibración** (2000 frames donde el ATD tiene balón):
+
+- El modelo siempre detecta *algo* con confianza alta, pero el candidato principal solo está a
+  menos de 2 m del balón real en el 52 % de los casos.
+- La confianza no distingue: los fallos tienen la misma confianza que los aciertos (0,84 frente a
+  0,86).
+- **Los 5 candidatos contienen el balón real en el 64 % de los frames** (80 % a menos de 5 m).
+
+**Diagnóstico:**
+
+- La alineación de frames es correcta: el pico de acierto está en el desfase 0.
+- No hay un falso positivo fijo: los fallos están repartidos por 344 zonas de la imagen.
+- Los fallos son *otros objetos parecidos a un balón*: balones de repuesto en la banda, cabezas,
+  medias.
+
+Por eso `merge.py` no se queda con el candidato de mayor confianza. Se queda con el que encaja con la
+trayectoria (alcanzable a velocidad física desde la última posición aceptada), descarta los que caen
+fuera del campo y exige tramos de varios frames seguidos.
+
+**Simulación de huecos** (`merge --simulate`, 40 tramos de 5 s con el balón del ATD oculto):
+
+| | rellena | acierto <2 m (de lo rellenado) | acierto <5 m | acierto <2 m (de todo) |
+|---|---|---|---|---|
+| top-1 sin seguimiento | 100 % | 52 % | — | 52 % |
+| `merge` (parámetros por defecto) | 84 % | **67,5 %** | 82 % | 56,5 % |
+
+El techo es el 64 % de frames con el balón real entre los 5 candidatos. Ya se está cerca: para
+mejorar más hay que mejorar el detector (afinarlo con frames de este partido) o usar a los
+jugadores como pista.
+
+**Pase completo (ATD enriquecido):** el balón pasa de estar visible en el 59 % al **87 %** de los
+frames calificados. Se rellena el 67 % de los frames sin balón.
+
+> **Cuidado.** Los huecos largos (>30 s) se rellenan en un 76 %, y muchos son pelota muerta. En esos
+> casos el detector encuentra *un* balón (en manos del que saca, o uno de repuesto). Si se usa el
+> balón enriquecido como si fuera el del ATD, se pierde la señal "hueco largo = pelota muerta", que
+> es la que más pesa en v1. Los modelos deben recibir `ball_source` y `ball_conf` como features, y
+> conservar la visibilidad del ATD original.
+
+## Reproducibilidad
+
+- Inferencia con `cudnn.deterministic` y pesos verificados por SHA-256, que `download_models.sh`
+  imprime.
+- En la misma GPU, el resultado es estable.
+- La entrega debe regenerarse en la misma máquina o con la misma GPU. Si no se puede garantizar,
+  hay que decidir si la submission final usa el ATD enriquecido o solo el original.

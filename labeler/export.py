@@ -4,7 +4,9 @@
     docker compose run --rm dev python evaluation/run_evaluation.py --gt labels/validation_luis.csv
 
 Frames nobody labelled are X, which the evaluator never scores. Blocks not marked done are left
-out unless --include-unfinished is given. Prints counts only.
+out unless --include-unfinished is given. Blocks started from a model's prediction ("Partir de la
+predicción") are anchored to that model; --exclude-seeded keeps them out of a validation set.
+Prints counts only.
 """
 import argparse
 import json
@@ -25,6 +27,8 @@ def main():
     parser.add_argument("--include-unfinished", action="store_true")
     parser.add_argument("--include-public", action="store_true",
                         help="also export the public block (it already has official GT)")
+    parser.add_argument("--exclude-seeded", action="store_true",
+                        help="leave out blocks that started from a model's prediction")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -46,20 +50,25 @@ def main():
             continue
         doc = max(docs, key=lambda d: d.get("updated") or "")
         if not doc.get("done") and not args.include_unfinished:
-            skipped.append(block["id"])
+            skipped.append(block["id"] + " (not done)")
+            continue
+        if doc.get("seeded_from") and args.exclude_seeded:
+            skipped.append("{} (from {})".format(block["id"], doc["seeded_from"]))
             continue
         window = dense(doc["changes"], block["first"], block["last"])
         labels[block["first"]:block["last"] + 1] = window
-        used.append((block["id"], doc["annotator"], float((window != "X").mean())))
+        used.append((block["id"], doc["annotator"], float((window != "X").mean()),
+                     doc.get("seeded_from", "")))
 
     out = args.out or os.path.join(LABELS_DIR, "validation_{}.csv".format(args.annotator))
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     pd.DataFrame({"frame": np.arange(len(labels)), "label": labels}).to_csv(out, index=False)
 
-    for block_id, annotator, coverage in used:
-        print("  {:<6} {:<16} {:>6.1%} labelled".format(block_id, annotator, coverage))
+    for block_id, annotator, coverage, seeded in used:
+        print("  {:<6} {:<16} {:>6.1%} labelled{}".format(
+            block_id, annotator, coverage, "   started from " + seeded if seeded else ""))
     if skipped:
-        print("  not done, skipped: " + ", ".join(skipped))
+        print("  skipped: " + ", ".join(skipped))
     graded = labels != "X"
     print("{} blocks, {} frames ({:.1f} min) -> {}".format(
         len(used), int(graded.sum()), graded.sum() / FPS / 60, os.path.relpath(out)))

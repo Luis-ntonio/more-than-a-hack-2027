@@ -19,6 +19,7 @@ const S = {
   zoomFrames: 375,                       // half-width of the zoom strip, in frames
   ctx: { half: 4, speed: 1, start: 0, end: 0, center: 0, pos: -1, timer: null },
   gt: null, showGt: false,
+  predName: "", pred: null, showPred: true, seeded: "", seedArmed: false,
 };
 
 const main = $("#main");
@@ -266,18 +267,25 @@ function drawTimeline(canvas, from, to, opts) {
   const span = to - from + 1;
   const x = (f) => ((f - from) / span) * w;
   g.clearRect(0, 0, w, h);
-  const gtH = S.showGt && S.gt ? Math.round(h * 0.28) : 0;
-  const trackH = h - gtH - (opts.ticks ? 14 : 0);
+  // reference rows under the annotator's track: the official GT and/or a model's prediction
+  const rows = [];
+  if (S.showGt && S.gt) rows.push(["GT", S.gt]);
+  if (S.showPred && S.pred) rows.push([S.predName.slice(0, 6), S.pred]);
+  const rowH = rows.length ? Math.round(h * (rows.length > 1 ? 0.2 : 0.28)) : 0;
+  const trackH = h - rows.length * rowH - (opts.ticks ? 14 : 0);
   // frames outside the block are not part of the task: draw them dark
   g.fillStyle = "#0a0b0e"; g.fillRect(0, 0, w, h);
   const bf = Math.max(from, S.block.first), bl = Math.min(to, S.block.last);
   if (bl >= bf) {
     drawTrack(g, S.changes, bf, bl, x, 0, trackH, w);
-    if (gtH) {
-      drawTrack(g, S.gt, bf, bl, x, trackH + 2, gtH - 2, w);
-      g.fillStyle = "rgba(0,0,0,.55)"; g.fillRect(2, trackH + 3, 22, gtH - 4);
-      g.fillStyle = "#fff"; g.font = "10px system-ui"; g.fillText("GT", 5, trackH + gtH - 4);
-    }
+    rows.forEach(([name, changes], r) => {
+      const y = trackH + r * rowH;
+      drawTrack(g, changes, bf, bl, x, y + 2, rowH - 2, w);
+      g.font = "10px system-ui";
+      const tw = g.measureText(name).width + 6;
+      g.fillStyle = "rgba(0,0,0,.6)"; g.fillRect(2, y + 3, tw, rowH - 4);
+      g.fillStyle = "#fff"; g.fillText(name, 5, y + rowH - 4);
+    });
   }
   // change-point diamonds
   g.fillStyle = "#fff";
@@ -440,7 +448,7 @@ async function save() {
     const r = await fetch("/api/labels", {
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ block: S.block.id, annotator: S.annotator, changes: S.changes,
-        done: S.done, notes: S.notes }),
+        done: S.done, notes: S.notes, seeded_from: S.seeded }),
     });
     const body = await r.json();
     if (!r.ok) throw new Error(body.error || r.status);
@@ -468,17 +476,18 @@ async function loadBlock(id) {
   $("#showgt").checked = false;
   $("#compareout").textContent = "";
   $("#publicpanel").hidden = !block.public;
-  S.changes = []; S.done = false; S.notes = "";
+  S.changes = []; S.done = false; S.notes = ""; S.seeded = ""; S.seedArmed = false;
   if (S.annotator) {
     const r = await fetch(`/api/labels?block=${id}&annotator=${encodeURIComponent(S.annotator)}`);
     if (r.ok) {
       const doc = await r.json();
       S.changes = normalize(doc.changes || []);
-      S.done = !!doc.done; S.notes = doc.notes || "";
+      S.done = !!doc.done; S.notes = doc.notes || ""; S.seeded = doc.seeded_from || "";
     }
   }
   $("#done").checked = S.done;
   $("#notes").value = S.notes;
+  await loadPrediction();
   S.dirty = false;
   setSaveStatus("sin cambios");
   localStore("block", id);
@@ -497,6 +506,7 @@ async function refreshBlockList() {
     const mine = rows.find((r) => r.annotator === S.annotator);
     const others = rows.filter((r) => r.annotator !== S.annotator).map((r) => r.annotator + (r.done ? "✓" : ""));
     let tag = mine ? (mine.done ? " ✓" : ` · ${Math.round(mine.coverage * 100)} %`) : "";
+    if (mine && mine.seeded_from) tag += ` (desde ${mine.seeded_from})`;
     if (others.length) tag += "  [" + others.join(", ") + "]";
     const opt = document.createElement("option");
     opt.value = b.id;
@@ -512,6 +522,41 @@ function localStore(key, value) {
     localStorage.setItem("labeler." + key, value);
   } catch (_) { return null; }
 }
+
+// -- model predictions ---------------------------------------------------------------------------
+
+async function loadPrediction() {
+  S.pred = null;
+  if (S.predName && S.block) {
+    const r = await fetch(`/api/prediction?name=${encodeURIComponent(S.predName)}&block=${S.block.id}`);
+    if (r.ok) S.pred = await r.json();
+  }
+  $("#seedbtn").disabled = !S.pred;
+  $("#seeded").textContent = S.seeded ? `partido de ${S.seeded}` : "";
+  render();
+}
+// Copy the model's labels into the block as the starting point. Two clicks if there is work to
+// lose, so a stray click cannot wipe a block (and no browser dialog is needed).
+function seedFromPrediction() {
+  if (!S.pred) return toast("Elige un modelo arriba");
+  if (S.changes.length && !S.seedArmed) {
+    S.seedArmed = true;
+    setTimeout(() => { S.seedArmed = false; }, 3000);
+    return toast("Esto reemplaza tus etiquetas del bloque: pulsa otra vez para confirmar");
+  }
+  S.seedArmed = false;
+  S.seeded = S.predName;
+  $("#seeded").textContent = `partido de ${S.seeded}`;
+  edit(() => { S.changes = S.pred.map((c) => c.slice()); });
+  toast(`Copiados ${S.changes.length} cambios de ${S.predName}: revisa y corrige`);
+}
+$("#model").addEventListener("change", (e) => {
+  S.predName = e.target.value;
+  S.showPred = true;
+  localStore("model", S.predName);
+  loadPrediction();
+  e.target.blur();
+});
 
 // -- public-GT practice --------------------------------------------------------------------------
 
@@ -571,6 +616,7 @@ document.querySelector(".controls").addEventListener("click", (e) => {
     delete: deleteChange,
     undo: undo,
     nextgap: nextGap,
+    seed: seedFromPrediction,
   })[b.dataset.act]();
 });
 
@@ -599,6 +645,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "delete" || k === "backspace") deleteChange();
   else if (k === "n") nextGap();
   else if (k === "c") startContext();
+  else if (k === "m") { S.showPred = !S.showPred; render(); }
   else if (k === "-") setRate(-1);
   else if (k === "+" || k === "=") setRate(1);
   else handled = false;
@@ -625,6 +672,14 @@ window.addEventListener("resize", () => render());
   main.src = ctxVideo.src = "/video";
   S.annotator = localStore("annotator") || "";
   $("#annotator").value = S.annotator;
+  const names = await (await fetch("/api/predictions")).json();
+  for (const name of names) {
+    const opt = document.createElement("option");
+    opt.value = opt.textContent = name;
+    $("#model").appendChild(opt);
+  }
+  const savedModel = localStore("model");
+  if (savedModel && names.includes(savedModel)) { $("#model").value = savedModel; S.predName = savedModel; }
   await refreshBlockList();
   const saved = localStore("block");
   const first = S.config.blocks.find((b) => b.id === saved) || S.config.blocks.find((b) => !b.public) || S.config.blocks[0];
