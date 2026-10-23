@@ -6,6 +6,8 @@ Trains two LightGBM models on window features around each frame -- alive vs dead
 away on alive frames -- from the public GT plus every block marked done in labels/. Their
 probabilities go through v1's HMM, and the result is written to evaluation/results/prelabel.csv,
 which the labeller offers as a model ("Partir de la prediccion"). Rerun after each finished block.
+Hand labels are first moved onto the GT's timing with each annotator's offset (labeler.timing), so
+the pre-labels land where the GT would put the changes; --no-shift trains on them as saved.
 
 It is a labelling aid, not the submission: it is trained on hand labels of this very match.
 Reports leave-one-block-out scores and correction counts (aggregates only) so the team can see
@@ -27,6 +29,7 @@ from possession.models import V1_PARAMS, _apply_prekickoff_rule, dead_probabilit
 import sys
 sys.path.insert(0, os.path.join(ROOT, "evaluation"))
 import possession_metrics as pm  # noqa: E402
+from labeler.timing import shifted_changes  # noqa: E402
 
 LABELS_DIR = os.path.join(ROOT, "labels")
 PUBLIC_GT = os.path.join(ROOT, "evaluation", "gt", "{}_possession_gt_public.csv".format(GAME))
@@ -123,7 +126,7 @@ def dense(changes, first, last):
     return out
 
 
-def training_blocks():
+def training_blocks(shift=True):
     """[(name, first, last, labels)] from the public GT and every finished block in labels/."""
     blocks = []
     gt = np.array([str(v).strip().upper() for v in pm.read_label_csv(PUBLIC_GT)["label"].values])
@@ -140,11 +143,13 @@ def training_blocks():
                 continue
             if doc["block"] not in latest or doc["updated"] > latest[doc["block"]]["updated"]:
                 latest[doc["block"]] = doc
+    shifts = {}
     for block_id, doc in sorted(latest.items()):
         if doc["first"] <= blocks[0][2] and doc["last"] >= blocks[0][1]:
             continue  # the public block: the official GT wins
         blocks.append((block_id + ("*" if doc.get("seeded_from") else ""), doc["first"], doc["last"],
-                       dense(doc["changes"], doc["first"], doc["last"])))
+                       dense(shifted_changes(doc, shifts) if shift else doc["changes"],
+                             doc["first"], doc["last"])))
     return blocks
 
 
@@ -213,11 +218,13 @@ def score_block(truth_block, pred_block):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-cv", action="store_true", help="skip leave-one-block-out scoring")
+    parser.add_argument("--no-shift", action="store_true",
+                        help="train on hand labels as saved, without moving them onto the GT's timing")
     args = parser.parse_args()
 
     n_frames = GAMES[GAME]["n_video_frames"]
     X, names = frame_features()
-    blocks = training_blocks()
+    blocks = training_blocks(shift=not args.no_shift)
     print("training blocks: " + ", ".join("{} ({:.1f} min)".format(b[0], (b[2] - b[1] + 1) / FPS / 60)
                                           for b in blocks) + "   (* = started from a model)")
 

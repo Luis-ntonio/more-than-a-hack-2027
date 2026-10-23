@@ -32,6 +32,39 @@ de pulsaciones.
 *Comparar con GT* y usa *Mostrar GT* para ver en qué difiere vuestro criterio del de la organización.
 La GT manda (ver `CHALLENGE.md`).
 
+## Dónde pone el GT los cambios, y cómo calibrarte
+
+`analysis/gt_changes.py` mide qué pasa en el ATD en los frames de cambio del GT público:
+
+- **Pelota muerta:** coincide con el pitido o con la salida del campo. Aquí no hay ambigüedad.
+- **Reanudación:** el GT cambia de media unos 0,9 s *después* de que el balón se ponga en juego.
+  En ese frame el balón ya va camino del receptor.
+- **Cambio de posesión:** el GT cambia con el balón en movimiento (≈6,5 m/s) y sin nadie encima
+  (≈2,7 m del nuevo equipo, ≈3,7 m del anterior). Unas veces es después del toque de
+  interceptación y el rebote; otras, antes de que el nuevo equipo reciba. No hay una regla
+  geométrica fija: son solo 12 cambios, y el balón del ATD tiene error.
+
+Por eso **no intentéis clavar el frame del GT a ojo**. Marcad siempre en un momento claro y siempre
+igual: el toque que gana el balón en un cambio de posesión, el golpeo en una reanudación, y el
+pitido o la salida en una pelota muerta. Después, el export corrige vuestro desfase:
+
+```bash
+docker compose run --rm dev python -m labeler.timing                    # desfase de cada uno en 1T-00
+docker compose run --rm dev python -m labeler.export --annotator all --shift auto
+```
+
+`labeler.timing` empareja tus cambios del bloque `1T-00` con los del GT y calcula la mediana del
+desfase por tipo (pelota muerta, reanudación, posesión). `--shift auto` desplaza esa cantidad los
+cambios de cada anotador en todos sus bloques. El pre-etiquetador aplica el mismo desplazamiento
+antes de entrenar. **Hace falta haber etiquetado `1T-00` desde cero.** Sin ese bloque, tus etiquetas
+se usan sin desplazar. Los bloques que partieron de un modelo tampoco se desplazan, porque sus
+cambios sin tocar ya están en el timing del modelo.
+
+El desplazamiento solo mueve cambios: no recupera posesiones que no marcaste. En `1T-00`, macroF1
+pasa de 0,976 a 0,985 y spellF1 no cambia (0,827), porque lo que cuesta son las dos posesiones
+cortas que faltaban. Lo prioritario es no saltarse posesiones cortas; el frame exacto lo arregla el
+shift.
+
 ## Corregir sobre un modelo en vez de empezar de cero
 
 1. En la barra superior, elige **Modelo**:
@@ -61,8 +94,9 @@ etiquetar **2–3 bloques desde cero** y reservarlos para validar
 docker compose run --rm dev python -m possession.prelabel
 ```
 
-- Entrena con la GT pública más todos los bloques marcados como terminados, y escribe
-  `evaluation/results/prelabel.csv`. Aparece en el selector de modelos sin reiniciar nada.
+- Entrena con la GT pública más todos los bloques marcados como terminados, ya desplazados al
+  timing del GT, y escribe `evaluation/results/prelabel.csv`. Aparece en el selector de modelos sin
+  reiniciar nada.
 - Volved a ejecutarlo cada vez que terminéis uno o dos bloques.
 - Imprime, por bloque, cuántas correcciones habrían hecho falta con él y con v1 (añadir, mover o
   borrar cambios). Cuando el total del pre-etiquetador sea claramente menor, pasad a usarlo.
