@@ -10,6 +10,22 @@ docker compose up labeler          # abre http://localhost:8765
 Todo se queda en tu máquina. El vídeo se lee de `data/` en solo lectura, y las etiquetas se guardan
 en `labels/<bloque>__<anotador>.json`. Esa carpeta está en el gitignore y bloqueada para Claude Code.
 
+## Visualizador de tracking
+
+La pestaña **Visualizar** (http://localhost:8765/overlay) muestra el vídeo con capas que se activan
+y desactivan con casillas o con las teclas `1`…`8`:
+
+- líneas de la cancha;
+- jugadores de cada equipo, con su número de slot;
+- balón del tracking y su estela;
+- balón con el que Roboflow rellenó los huecos;
+- las 5 detecciones brutas de YOLO, con su confianza.
+
+Todo se proyecta con la homografía de cada frame. Las cajas de los jugadores son aproximadas,
+porque el tracking solo da la posición de los pies. Las de los candidatos de Roboflow son las
+reales del detector. Las capas de Roboflow requieren haber ejecutado `enrich` (ver
+`enrich/README.md`).
+
 ## Cómo se etiqueta
 
 No se etiqueta frame a frame: **solo se marcan los cambios**. Al pulsar `H`, `A` o `D` en un frame,

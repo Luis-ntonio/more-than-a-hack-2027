@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visualizador de tracking</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="bar">
+  <div class="brand">Etiquetador <span class="muted" id="game"></span></div>
+  <nav class="tabs"><a href="/">Etiquetar</a><a href="/overlay" id="tab-overlay">Visualizar</a><a href="/roboflow" id="tab-roboflow">Solo huecos</a></nav>
+  <label class="field">Bloque
+    <select id="block"><option value="">(todo el partido)</option></select>
+  </label>
+  <label class="field gaps-only">Huecos de al menos
+    <select id="minlen">
+      <option value="0">cualquier duración</option><option value="1">1 s</option>
+      <option value="3">3 s</option><option value="10">10 s</option>
+    </select>
+  </label>
+  <label class="field">Ir a
+    <input id="goto" placeholder="1T 12:30" maxlength="12" autocomplete="off" spellcheck="false">
+  </label>
+  <div class="spacer"></div>
+  <div id="status" class="pill muted">cargando…</div>
+</header>
+
+<main class="layout">
+  <section class="stage">
+    <div class="viewer" id="viewer">
+      <video id="main" muted playsinline preload="auto"></video>
+      <canvas id="draw" class="drawlayer"></canvas>
+      <div class="overlay top-left">
+        <div id="clock" class="clock">--:--</div>
+        <div id="frameinfo" class="muted mono">frame —</div>
+      </div>
+      <div class="overlay top-right">
+        <div id="ballinfo" class="pill">—</div>
+      </div>
+      <div id="loading" class="overlay center hidden">cargando datos…</div>
+    </div>
+
+    <div class="timelines">
+      <div class="tl-row">
+        <span class="tl-label"><span class="gaps-only">solo huecos · </span>balón · <span id="rangetxt">partido</span></span>
+        <canvas id="srcall" height="34" title="Clic para ir a ese momento"></canvas>
+      </div>
+      <div class="tl-row">
+        <span class="tl-label">zoom ±15 s</span>
+        <canvas id="srczoom" height="34" title="Clic para ir a ese frame"></canvas>
+      </div>
+      <div class="tl-legend small">
+        <span><span class="swatch" style="background:var(--src1)"></span>tracking <b id="pct1"></b></span>
+        <span><span class="swatch" style="background:var(--src2)"></span>Roboflow <b id="pct2"></b></span>
+        <span><span class="swatch" style="background:var(--src3)"></span>interpolado <b id="pct3"></b></span>
+        <span><span class="swatch" style="background:var(--src0)"></span>sin balón <b id="pct0"></b></span>
+        <span class="muted" id="gapinfo"></span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button data-act="step" data-n="-125" title="↓">−5 s</button>
+      <button data-act="step" data-n="-25" title="Shift+←">−1 s</button>
+      <button data-act="step" data-n="-1" title="←">−1 f</button>
+      <button data-act="play" id="playbtn" title="Espacio">▶</button>
+      <button data-act="step" data-n="1" title="→">+1 f</button>
+      <button data-act="step" data-n="25" title="Shift+→">+1 s</button>
+      <button data-act="step" data-n="125" title="↑">+5 s</button>
+      <span class="sep"></span>
+      <button data-act="rate" data-n="-1" title="-">−</button>
+      <span id="rate" class="mono">1×</span>
+      <button data-act="rate" data-n="1" title="+">+</button>
+      <span class="sep"></span>
+      <button data-act="gap" data-n="-1" title="[">◀ hueco</button>
+      <button data-act="gap" data-n="1" title="]">hueco ▶</button>
+      <label class="toggle small"><input type="checkbox" id="gaploop"> repetir el hueco en bucle</label>
+    </div>
+  </section>
+
+  <aside class="side">
+    <div class="panel">
+      <h2>Capas</h2>
+      <div id="layers" class="layers"></div>
+      <div class="row small">
+        <button id="allon">Todas</button><button id="alloff">Ninguna</button>
+        <label class="toggle">Opacidad vídeo
+          <input type="range" id="dim" min="20" max="100" value="100">
+        </label>
+      </div>
+    </div>
+
+    <div class="panel gaps-only">
+      <h2>Solo huecos</h2>
+      <p class="small muted">Se reproducen de corrido solo los frames puntuados donde el tracking original no
+        tiene balón: lo que queda es exactamente el trabajo de Roboflow. Al terminar un hueco salta al siguiente.
+        La barra superior es la sucesión de huecos, no el partido.</p>
+    </div>
+
+    <div class="panel">
+      <h2>Qué es cada capa</h2>
+      <ul class="small criteria">
+        <li><b>Cancha</b>: las líneas del campo reglamentario proyectadas con la homografía del frame. Si no
+          encajan con las del vídeo, la homografía de ese frame está mal.</li>
+        <li><b>Jugadores</b>: posición del tracking (pies) proyectada. La caja es <b>aproximada</b>, calculada
+          con la escala local del campo; el tracking no trae cajas.</li>
+        <li><b>Balón (tracking)</b>: el balón del ATD original.</li>
+        <li><b>Balón Roboflow</b>: el balón con el que <code>enrich.merge</code> rellenó los huecos del
+          tracking (detector o interpolado).</li>
+        <li><b>Candidatos Roboflow</b>: las detecciones brutas de YOLO (hasta 5), con su caja real y su
+          confianza. Solo las que caen dentro de la cancha, y solo en frames donde el tracking perdió el balón.</li>
+      </ul>
+    </div>
+
+    <details class="panel" open>
+      <summary><h2>Atajos</h2></summary>
+      <table class="keys">
+        <tr><td><kbd>Espacio</kbd></td><td>reproducir / pausar</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>±1 frame · con <kbd>Shift</kbd> ±1 s · <kbd>↑</kbd> <kbd>↓</kbd> ±5 s</td></tr>
+        <tr><td><kbd>1</kbd>…<kbd>9</kbd></td><td>activar / desactivar la capa n</td></tr>
+        <tr><td><kbd>[</kbd> <kbd>]</kbd></td><td>ir al hueco anterior / siguiente del tracking (en Visualizar empieza 1 s antes)</td></tr>
+        <tr><td><kbd>-</kbd> <kbd>+</kbd></td><td>velocidad de reproducción</td></tr>
+      </table>
+    </details>
+  </aside>
+</main>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/overlay.js"></script>
+</body>
+</html>

@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(ROOT, "evaluation"))
 import possession_metrics as pm  # noqa: E402
 from games import GAME, GAMES, video_path  # noqa: E402
 from possession.io import FPS, graded_blocks, kickoff_frames  # noqa: E402
+from labeler.overlay import Overlay  # noqa: E402
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 LABELS_DIR = os.path.join(ROOT, "labels")
@@ -189,6 +190,7 @@ class App:
 
 class Handler(BaseHTTPRequestHandler):
     app = None
+    overlay = Overlay()
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
@@ -270,6 +272,18 @@ class Handler(BaseHTTPRequestHandler):
         query = {k: v[0] for k, v in parse_qs(url.query).items()}
         if url.path == "/":
             return self._static("index.html")
+        if url.path in ("/overlay", "/roboflow"):
+            return self._static("overlay.html")
+        if url.path == "/api/overlay/meta":
+            return self._json(self.overlay.meta())
+        if url.path == "/api/overlay/sources":
+            return self._json(self.overlay.sources())
+        if url.path == "/api/overlay":
+            try:
+                first, count = int(query.get("from", 0)), int(query.get("count", 250))
+            except ValueError:
+                return self._error(HTTPStatus.BAD_REQUEST, "from and count must be integers")
+            return self._json(self.overlay.frames(first, count))
         if url.path.startswith("/static/"):
             return self._static(url.path[len("/static/"):])
         if url.path == "/video":
