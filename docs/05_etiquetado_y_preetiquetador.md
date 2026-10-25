@@ -214,14 +214,44 @@ de media), con el desfase corregido y bootstrap de 1000 muestras.
   12,6 s. Se fusionan las posesiones cortas con sus vecinas. v1 acierta el número (150) pero las coloca
   peor.
 
-## 10. Siguientes pasos
+## 10. ¿Hay señal de toque en el tracking? (`analysis/touch_signal.py`)
 
-1. Medir qué separa las posesiones cortas en el GT (dirección y velocidad del balón en el toque,
-   cambio de dirección) con `analysis/gt_changes.py`, antes de invertir en GPU.
-2. Si el tracking no tiene esa señal: detector de jugadores en el vídeo (Roboflow) para obtener la
-   distancia real en píxeles entre el balón detectado y los jugadores.
-3. Entrega por *cross-fitting* (regla 1): cada bloque etiquetado se predice con el modelo que no lo
+Un "toque" es un frame en el que el balón del tracking gira más de un ángulo o cambia de velocidad
+más de un umbral entre los 5 frames anteriores y los 5 siguientes, con un jugador cerca. Su equipo
+es el del jugador más cercano. Se mide sobre los 11 bloques (55 min, 109 cambios H↔A):
+
+- *recall*: cambios con un toque del nuevo equipo a ±1 s;
+- precisión: toques del rival que de verdad son un cambio hacia ese equipo.
+
+| umbral (giro / Δv / radio) | toques/min | recall 0–2 s | 2–4 s | 4–8 s | 8–15 s | > 15 s | precisión |
+|---|---|---|---|---|---|---|---|
+| 25° / 3 m/s / 1,5 m | 11,8 | 36 % | 57 % | 42 % | 35 % | 40 % | 42 % |
+| 35° / 3 m/s / 1,5 m | 10,1 | 36 % | 48 % | 37 % | 25 % | 36 % | 41 % |
+| 50° / 4 m/s / 1,5 m | 5,1 | 18 % | 39 % | 32 % | 10 % | 24 % | 43 % |
+| 35° / 3 m/s / 2,5 m | 12,3 | 45 % | 57 % | 53 % | 35 % | 48 % | 40 % |
+| 35° / 3 m/s / 4 m | 13,1 | 50 % | 57 % | 58 % | 30 % | 48 % | 37 % |
+
+- **El tracking no ve la mayoría de los toques.** Solo hay un toque del nuevo equipo cerca de entre el
+  35 % y el 58 % de los cambios, y no depende de la duración de la posesión: las largas también salen
+  mal. Esas se encuentran por la cercanía sostenida, no por el toque.
+- **Y no es por falta de balón.** El balón del tracking se ve en el 87 % de los frames a ±1 s de un
+  cambio; solo en el 14 % de los cambios falta más de la mitad de esa ventana. El balón está, pero su
+  trayectoria no muestra los toques: ~10–13 toques/min es muy poco para un partido. Probablemente
+  está suavizado, o pegado al suelo en los pases altos.
+- **Precisión ~40 %**: de cada 5 toques del rival, 3 no son un cambio (desvíos, duelos perdidos,
+  ruido). Una variable de toque sola no basta, y por eso las de la sección 8 no ayudaron.
+
+**Conclusión: la información para las posesiones cortas no está en el tracking.** Para recuperarlas
+hay que sacar los toques del vídeo.
+
+## 11. Siguientes pasos
+
+1. Toques desde el vídeo: trayectoria del balón detectado en píxeles, sin suavizar (Roboflow ya lo
+   detecta, frame a frame) y cajas reales de jugadores con un detector de jugadores, para medir la
+   distancia balón–jugador en la imagen. Primero, rehacer esta tabla con el balón detectado en los
+   frames donde lo hay, para ver si el *recall* sube antes de invertir en el detector de jugadores.
+2. Entrega por *cross-fitting* (regla 1): cada bloque etiquetado se predice con el modelo que no lo
    vio, y el resto del partido con el modelo entrenado con todo. `prelabel_oof.csv` ya sigue ese
    esquema.
-4. Decidir si la entrega usa el balón enriquecido con Roboflow (GPU): para la regla 3 hay que
+3. Decidir si la entrega usa el balón enriquecido con Roboflow (GPU): para la regla 3 hay que
    comprobar que es determinista o fijar su salida como artefacto.
