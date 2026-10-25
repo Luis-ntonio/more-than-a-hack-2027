@@ -20,12 +20,17 @@ ENRICHED_DIR = os.path.join(CACHE_DIR, "enriched")
 ASSIGN_M = 3.0
 BALL_MATCH_M = 3.0
 CONTACT = 0.15      # in box heights, outside the box
+JERSEY_SURE = 0.1   # jersey=True: trust the shirt colour when P(home) is below this or above 1 - it
 NONE, CONTESTED = -1, -2
 BALL, GOALKEEPER, PLAYER = 0, 1, 2
 
 
 def detections_path(frames="labelled"):
     return os.path.join(ENRICHED_DIR, "{}_player_detections_{}.npz".format(GAME, frames))
+
+
+def jersey_path(frames="labelled"):
+    return os.path.join(ENRICHED_DIR, "{}_jersey_team_{}.npz".format(GAME, frames))
 
 
 def available(frames="labelled"):
@@ -45,11 +50,18 @@ def _team_of_boxes(h, boxes, players_m, team):
     return np.where(dist[np.arange(len(boxes)), best] < ASSIGN_M, team[seen][best], NONE)
 
 
-def control(frames="labelled", contact=CONTACT):
+def control(frames="labelled", contact=CONTACT, jersey=False):
     """(n_frames,) control per frame: HOME, AWAY, CONTESTED, or NONE (no ball, no contact, or no
     detections for that frame), plus the share of frames with a ball box and with a team-assigned
-    box, for reporting."""
+    box, for reporting. jersey=True takes a player box's team from its shirt colour
+    (enrich.jersey_team) where the classifier is sure (P within JERSEY_SURE of 0 or 1), the ATD's
+    elsewhere."""
     z = np.load(detections_path(frames))
+    p_home = None
+    if jersey:
+        j = np.load(jersey_path(frames))
+        assert np.array_equal(j["frames"], z["frames"])
+        p_home = j["p_home"]
     atd = load_atd()
     homography = load_homography()
     scale = np.array(PITCH, dtype=np.float64)
@@ -57,13 +69,15 @@ def control(frames="labelled", contact=CONTACT):
     tracking = atd["ball"].astype(np.float64) * scale
     out = np.full(len(atd["ball"]), NONE)
     with_ball, assigned = 0, []
-    for frame, boxes in zip(z["frames"], z["boxes"]):
+    for row, (frame, boxes) in enumerate(zip(z["frames"], z["boxes"])):
         h = homography[frame]
-        boxes = boxes[np.isfinite(boxes[:, 4])]
+        valid = np.isfinite(boxes[:, 4])
+        boxes = boxes[valid]
         if not len(boxes) or not np.all(np.isfinite(h)):
             continue
         balls = boxes[boxes[:, 5] == BALL]
-        people = boxes[(boxes[:, 5] == PLAYER) | (boxes[:, 5] == GOALKEEPER)]
+        is_person = (boxes[:, 5] == PLAYER) | (boxes[:, 5] == GOALKEEPER)
+        people = boxes[is_person]
         if not len(balls) or not len(people):
             continue
         bx, by = (balls[:, 0] + balls[:, 2]) / 2, (balls[:, 1] + balls[:, 3]) / 2
@@ -80,6 +94,10 @@ def control(frames="labelled", contact=CONTACT):
             continue
         with_ball += 1
         teams = _team_of_boxes(h, people, players[frame], atd["team"])
+        if p_home is not None:
+            p = p_home[row][valid][is_person]
+            sure = np.abs(p - 0.5) > 0.5 - JERSEY_SURE
+            teams = np.where(sure, np.where(p >= 0.5, HOME, AWAY), teams)
         assigned.append(np.mean(teams != NONE))
         height = people[:, 3] - people[:, 1]
         dx = np.maximum(0, np.maximum(people[:, 0] - bx[k], bx[k] - people[:, 2])) / height
@@ -102,4 +120,24 @@ def episodes(ctrl, min_frames):
     for a, b in zip(np.concatenate([[0], edges]), np.concatenate([edges, [len(ctrl)]])):
         if ctrl[a] in (HOME, AWAY) and b - a >= min_frames:
             out[a:b] = ctrl[a]
+    return out
+
+
+def features(frames="labelled", jersey=True, min_frames=3):
+    """Per-frame control features as {name: array}: team (+1 home, -1 away, 0 none) of the last and
+    next control run of at least min_frames frames, seconds since / until it, whether they agree,
+    and the control in the frame itself (0.5 * sign when contested is not counted). Frames outside
+    the detection file get no control, so these features are only meaningful on its frames."""
+    from possession import features as feats
+    from possession.io import FPS
+    from possession.touches import last_next
+    ctrl, _ = control(frames, jersey=jersey)
+    ep = episodes(ctrl, min_frames)
+    last, since, nxt, until = last_next(ep)
+    now = np.where(ctrl == HOME, 1.0, np.where(ctrl == AWAY, -1.0, 0.0))
+    out = {"ctl_last": last, "ctl_since_s": since, "ctl_next": nxt, "ctl_until_s": until,
+           "ctl_agree": last * nxt, "ctl_now": now}
+    for w in (1.0, 3.0):
+        out["ctl_mean_{}".format(w)] = np.nan_to_num(
+            feats.rolling_nanmean(np.where(ctrl >= 0, now, np.nan), int(w * FPS)), nan=0.0)
     return out

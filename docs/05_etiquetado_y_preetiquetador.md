@@ -389,3 +389,51 @@ Detalle en `enrich/README.md`. Se afinó con etiquetas sacadas del ATD, sin etiq
 evaluó en los últimos 20 min de la 2ª parte, que quedaron fuera del entrenamiento. El candidato
 principal acierta más (57,8 % frente a 52,2 % a menos de 2 m), pero en el relleno de huecos simulado
 empata (53,7 % frente a 54,6 % del total). Se mantiene el detector original.
+
+## 17. Equipo por color de camiseta (`enrich/jersey_team.py`)
+
+```bash
+docker compose run --rm gpu python -m enrich.jersey_team features    # 1,95 M cajas de jugador
+docker compose run --rm gpu python -m enrich.jersey_team train
+docker compose run --rm dev python analysis/control_signal.py --jersey
+docker compose run --rm dev python -m possession.prelabel --control
+```
+
+Se pone a prueba la explicación 2 de la sección 14: que la asignación de equipo por el jugador del
+ATD falle en los duelos.
+
+- **Etiquetas, solo las claras:** el jugador del ATD más cercano a los pies de la caja está a menos de
+  1 m y no hay ningún rival a menos de 3 m. Es el 69 % de las cajas.
+- **Variables:** histograma HSV del torso sin el césped, y la media y la dispersión del color en Lab.
+  Clasificador LightGBM.
+- **Validación:** se entrena con la 1ª parte y se evalúa con la 2ª, donde los equipos han cambiado de
+  lado. La 1ª parte se predice con el modelo entrenado con la 2ª.
+
+| cajas | n | coincide con el ATD |
+|---|---|---|
+| 2ª parte, claras (acierto real) | 366 196 | **98,8 %** |
+| 2ª parte, duelos | 92 708 | 93,5 % |
+| 1ª parte, duelos | 258 482 | 89,6 % |
+
+El clasificador es fiable, y en los duelos corrige el equipo del ATD en el 6–10 % de las cajas.
+
+**Pero apenas cambia el control en las posesiones cortas.** Con el equipo por camiseta (cuando
+P < 0,1 o > 0,9, y si no, el del ATD):
+
+| posesiones de | equipo del ATD | equipo por camiseta |
+|---|---|---|
+| 0–2 s | 46 % | 46 % |
+| 2–4 s | 52 % | 56 % |
+| 4–8 s | 58 % | 62 % |
+| 8–15 s / > 15 s | 86 / 89 % | 88 / 90 % |
+| mejor segmentación por control (spellF1) | 0,435 | 0,468 |
+
+Usado como variable del pre-etiquetador (`--control`: último y siguiente equipo con control, tiempo
+desde y hasta él, y control en ventanas de 1 y 3 s), el spellF1 medio es **0,502 frente a 0,510**, con
+242 correcciones frente a 244. Es neutro.
+
+**Conclusión.** La asignación de equipo explica una parte pequeña del problema. Aun con el equipo bien
+identificado, en las posesiones de menos de 4 s quien toca el balón es el equipo etiquetado solo la
+mitad de las veces. La causa principal es la convención del GT para los balones divididos
+(explicación 1): esas posesiones no se ven como control del balón. `--control` queda como opción
+experimental: solo hay detecciones de jugadores en los bloques etiquetados.

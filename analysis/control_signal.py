@@ -53,8 +53,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--contact", type=float, default=pc.CONTACT,
                         help="ball within this many box heights of a player box is contact")
+    parser.add_argument("--jersey", action="store_true",
+                        help="team of a player box from its shirt colour (enrich.jersey_team)")
     args = parser.parse_args()
-    ctrl, stats = pc.control(contact=args.contact)
+    ctrl, stats = pc.control(contact=args.contact, jersey=args.jersey)
     print("{} frames with player detections: a matched ball box in {:.0%}, team assigned to {:.0%} "
           "of player boxes".format(stats["frames"], stats["with_ball"], stats["boxes_assigned"]))
     blocks = [(n, f, l, np.array([code(x) for x in lab]), lab) for n, f, l, lab in training_blocks()]

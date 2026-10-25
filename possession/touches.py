@@ -102,7 +102,7 @@ def confirmed(team):
     return out
 
 
-def _last_next(events):
+def last_next(events):
     """Signed team (+1 home, -1 away, 0 none) of the last / next event, and seconds since / until it,
     capped at 60."""
     n = len(events)
@@ -123,7 +123,7 @@ def features(tracking_m):
     team = touches(ball, team_distances(ball))
     out = {}
     for name, events in (("touch", team), ("ctouch", confirmed(team))):
-        last, since, nxt, until = _last_next(events)
+        last, since, nxt, until = last_next(events)
         out[name + "_last"], out[name + "_since_s"] = last, since
         out[name + "_next"], out[name + "_until_s"] = nxt, until
         out[name + "_agree"] = last * nxt
@@ -132,7 +132,7 @@ def features(tracking_m):
     idx = np.flatnonzero(c >= 0)
     switch = np.full_like(c, -1)
     switch[idx[1:][c[idx[1:]] != c[idx[:-1]]]] = c[idx[1:][c[idx[1:]] != c[idx[:-1]]]]
-    last, since, nxt, until = _last_next(switch)
+    last, since, nxt, until = last_next(switch)
     out["cswitch_since_s"], out["cswitch_until_s"] = since, until
     out["cswitch_last"], out["cswitch_next"] = last, nxt
     return out
