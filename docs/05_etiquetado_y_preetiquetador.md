@@ -481,3 +481,73 @@ El pre-etiquetador solo saca 0,510. Las propuestas solo encajan con un tercio de
 faltan, y como solo el 5 % de las propuestas son aciertos, ni un AUC de 0,8 da la precisión necesaria.
 El problema de fondo es **encontrar los límites**: la señal se ve en la posesión entera, pero
 proponerla exige saber ya dónde empieza y dónde acaba.
+
+## 19. Smart tagging y broadcast como variables
+
+```bash
+docker compose run --rm dev python analysis/smart_tagging_vs_labels.py
+docker compose run --rm dev python -m possession.broadcast              # alineación, ~4 min
+docker compose run --rm dev python -m possession.prelabel --tagging     # y --broadcast
+```
+
+### Smart tagging (`possession/smart_tagging.py`)
+
+Ya viene en el tiempo del vídeo táctico. Contra los 55 min etiquetados:
+
+| | resultado |
+|---|---|
+| equipo implicado por el código (ofensivo: el etiquetado; defensivo: el rival) | BUILD UP 99 %, PROGRESSION 85 %, transiciones 71 %, SET PIECES 68 %, en el área / último tercio 56–67 % |
+| reinicio real (D → H/A) tras el inicio de un balón parado | córner 6,0 s, saque de puerta 4,9 s, banda 6,2 s, falta 12,2 s (mediana) |
+| equipo que reinicia = equipo etiquetado del balón parado | 100 % (12 de 12; los saques de banda no tienen equipo) |
+| GOALS | 92–95 % de sus frames son D |
+
+Variables:
+- el equipo que implica cada código, una columna por código;
+- segundos desde y hasta el inicio de un balón parado, su tipo y su equipo;
+- segundos desde y hasta un gol.
+
+### Broadcast (`possession/broadcast.py`)
+
+**Alineación.** Las dos grabaciones van en tiempo real, así que fuera de las repeticiones un frame
+`j` del broadcast es el frame `j + c` del táctico. Los dos ATD no comparten identidades (51 slots
+frente a 46), así que se empareja por geometría: para cada jugador del broadcast, la distancia al
+jugador más cercano del mismo equipo en el táctico, más la del balón cuando los dos lo tienen. 600
+frames del broadcast se buscan en todo el táctico, y los desfases que se repiten son los del directo:
+
+- **+4 013 f (+160,5 s)** en la 1ª parte y **+26 920 f (+1 076,8 s)** en la 2ª (el broadcast se salta
+  el descanso);
+- el 74 % de las muestras encaja a menos de 2 m.
+
+Estado del broadcast en cada frame etiquetado del táctico:
+
+| estado | frames | balón muerto |
+|---|---|---|
+| directo (coste < 2 m) | 56,8 % | 24,3 % |
+| campo visible pero no encaja (repetición o mal emparejado) | 20,9 % | 22,8 % |
+| **plano cerrado o sin campo** | 22,2 % | **85,6 %** |
+| todos | | 37,6 % |
+
+Un plano cerrado en el broadcast es una señal muy fuerte de balón muerto. Los frames "no encaja" se
+parecen al directo, así que casi todos son directo mal emparejado y no repeticiones. El balón del
+broadcast cubre solo el 8 % de los huecos del táctico (a 0,58 m de mediana cuando están los dos),
+porque Roboflow ya los rellenaba.
+
+Variables:
+- el estado;
+- el coste del emparejamiento;
+- si el broadcast tiene balón;
+- la proporción de frames que no son directo en ventanas de 2, 5 y 10 s;
+- la duración del tramo que no es directo.
+
+### Resultado (validación dejando un bloque fuera, 11 bloques)
+
+| variante | spellF1 medio | macroF1 medio | correcciones |
+|---|---|---|---|
+| pre-etiquetador | 0,510 | 0,803 | 244 |
+| `--tagging` | **0,521** | **0,816** | 235 |
+| `--broadcast` | **0,521** | 0,813 | **229** |
+| `--broadcast --tagging` | 0,512 | 0,810 | 236 |
+
+Cada fuente da una mejora pequeña y del mismo signo en las tres medidas, pero juntas no se suman, y
+todas las diferencias caen dentro del ruido entre bloques. Quedan como opciones y no se usan por
+defecto. El repo público no incluye la alineación, que es un dato derivado: `cache/`.

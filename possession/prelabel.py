@@ -24,7 +24,9 @@ import numpy as np
 import pandas as pd
 
 from possession import features as feats
+from possession import broadcast as broadcast_features
 from possession import control as control_features
+from possession import smart_tagging as tagging_features
 from possession import touches as touch_features
 from possession.io import (AWAY, FPS, GAME, GAMES, HOME, PITCH, ROOT, graded_blocks,
                            kickoff_frames, load_atd, load_homography)
@@ -52,7 +54,7 @@ N_ROUNDS = 300
 
 # -- features ------------------------------------------------------------------------------------
 
-def frame_features(use_touches=False, use_control=False):
+def frame_features(use_touches=False, use_control=False, use_tagging=False, use_broadcast=False):
     """(n, k) per-frame feature matrix and names, from the original and the enriched ATD, plus
     ball touches from the detector's ball (possession.touches) if use_touches."""
     homography = load_homography()
@@ -115,6 +117,12 @@ def frame_features(use_touches=False, use_control=False):
         else:
             print("  (no detections on the ATD's ball frames: run enrich.detect_ball --mode visible"
                   " for the touch features)")
+    if use_broadcast:
+        for name, values in broadcast_features.features(len(step)).items():
+            add(name, values)
+    if use_tagging:
+        for name, values in tagging_features.features(len(step)).items():
+            add(name, values)
     if use_control:
         # ball control from the video's player boxes, teams from shirt colour (possession.control)
         for name, values in control_features.features().items():
@@ -241,6 +249,11 @@ def score_block(truth_block, pred_block):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-cv", action="store_true", help="skip leave-one-block-out scoring")
+    parser.add_argument("--broadcast", action="store_true",
+                        help="add features from the broadcast mapped onto the tactical timeline "
+                             "(run python -m possession.broadcast first)")
+    parser.add_argument("--tagging", action="store_true",
+                        help="add Smart Tagging features (possession.smart_tagging)")
     parser.add_argument("--control", action="store_true",
                         help="add ball-control features from the video's player boxes (needs "
                              "enrich.detect_players and enrich.jersey_team; covers the labelled "
@@ -253,7 +266,8 @@ def main():
     args = parser.parse_args()
 
     n_frames = GAMES[GAME]["n_video_frames"]
-    X, names = frame_features(use_touches=args.touches, use_control=args.control)
+    X, names = frame_features(use_touches=args.touches, use_control=args.control,
+                              use_tagging=args.tagging, use_broadcast=args.broadcast)
     blocks = training_blocks(shift=not args.no_shift)
     print("training blocks: " + ", ".join("{} ({:.1f} min)".format(b[0], (b[2] - b[1] + 1) / FPS / 60)
                                           for b in blocks) + "   (* = started from a model)")

@@ -12,7 +12,8 @@ import pandas as pd
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-from games import GAME, GAMES, anchor_video_frame, half_video_blocks, require  # noqa: E402
+from games import (GAME, GAMES, anchor_video_frame, half_video_blocks, require,  # noqa: E402
+                   source_frames)
 
 CACHE_DIR = os.path.join(ROOT, "cache")
 FPS = GAMES[GAME]["fps"]
@@ -28,8 +29,10 @@ def _track_teams(meta_path):
     return np.array([HOME if t == team_ids[0] else AWAY for t in slots], dtype=np.int8)
 
 
-def load_atd(game=GAME, enriched=False):
-    """Tactical ATD as arrays: players (n, slots, 3) x/y/speed, ball (n, 2) x/y, team (slots,).
+def load_atd(game=GAME, enriched=False, source="tactical"):
+    """ATD as arrays: players (n, slots, 3) x/y/speed, ball (n, 2) x/y, team (slots,), indexed by
+    that source's video frame (source="broadcast" is on the broadcast timeline, see
+    possession/broadcast.py).
 
     Coordinates stay normalised 0-1 here; features.py converts to metres. enriched=True loads the
     copy whose ball gaps were filled from the video (enrich/merge.py), with ball_source and
@@ -42,14 +45,14 @@ def load_atd(game=GAME, enriched=False):
         z = np.load(path)
         return {key: z[key] for key in ("players", "ball", "team", "ball_source", "ball_conf")}
 
-    cache = os.path.join(CACHE_DIR, "{}_atd_tactical.npz".format(game))
+    cache = os.path.join(CACHE_DIR, "{}_atd_{}.npz".format(game, source))
     if os.path.isfile(cache):
         z = np.load(cache)
         return {"players": z["players"], "ball": z["ball"], "team": z["team"]}
 
-    meta_path, raw_path = require(["atd_meta", "atd_raw"], game)
+    meta_path, raw_path = require(["atd_meta", "atd_raw"], game, source=source)
     team = _track_teams(meta_path)
-    n_frames = GAMES[game]["n_video_frames"]
+    n_frames = source_frames(source, game)
     players = np.full((n_frames, len(team), 3), np.nan, dtype=np.float32)
     ball = np.full((n_frames, 2), np.nan, dtype=np.float32)
     with open(raw_path) as handle:
@@ -67,12 +70,12 @@ def load_atd(game=GAME, enriched=False):
     return {"players": players, "ball": ball, "team": team}
 
 
-def load_homography(game=GAME):
+def load_homography(game=GAME, source="tactical"):
     """(n, 9) homography coefficients, row-major, NaN where the frame has no valid matrix."""
-    cache = os.path.join(CACHE_DIR, "{}_homography_tactical.npy".format(game))
+    cache = os.path.join(CACHE_DIR, "{}_homography_{}.npy".format(game, source))
     if os.path.isfile(cache):
         return np.load(cache)
-    path = require(["homography"], game)[0]
+    path = require(["homography"], game, source=source)[0]
     frame = pd.read_csv(path)
     cols = ["h00", "h01", "h02", "h10", "h11", "h12", "h20", "h21", "h22"]
     matrix = frame[cols].to_numpy(dtype=np.float64)
