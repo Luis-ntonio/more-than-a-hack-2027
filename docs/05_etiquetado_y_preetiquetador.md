@@ -328,13 +328,57 @@ Ojo: el pre-etiquetador por defecto ya depende de este artefacto, porque usa el 
 (`rich_*`, `ball_source`, `ball_conf`). Con el artefacto verificado, `prelabel` es determinista:
 dos ejecuciones dan las mismas 244 correcciones.
 
-## 14. Siguientes pasos
+## 14. Control del balón con el detector de jugadores (fase 2)
 
-1. **Detector de jugadores en el vídeo** (fase 2): si el balón está *pegado* a un jugador en la
-   imagen y no solo cerca en el suelo, se sabe quién lo controla. Es lo único que ataca de verdad la
-   precisión de los toques.
-2. Alternativa sin GPU: aceptar el techo actual (~0,51 frente a 0,44 de v1) y centrar el trabajo en
-   la entrega.
-3. Entrega por *cross-fitting* (regla 1): cada bloque etiquetado se predice con el modelo que no lo
+```bash
+docker compose run --rm gpu python -m enrich.detect_players --frames labelled   # 82 500 frames, ~40 min
+docker compose run --rm dev python analysis/control_signal.py --contact 0.15     # también 0.5 y 1.0
+```
+
+- **`enrich/detect_players.py`**: el detector de Roboflow (jugador, portero, árbitro, balón; YOLOv8x
+  a 1280 px). Detecta 24 jugadores, 1 portero y 1 árbitro de mediana por frame, y una caja de balón
+  en el 77 % de los frames.
+- **`possession/control.py`**:
+  - el equipo de cada caja es el del jugador del ATD más cercano a sus pies (≤ 3 m), y así se asigna
+    el 83 % de las cajas;
+  - el balón es la caja de balón a ≤ 3 m del balón del ATD, y hay una en el 47 % de los frames;
+  - hay "control" cuando el balón está a menos de `contact` alturas de caja de un jugador.
+
+| contacto | duración | frames con control | frames en disputa | control = equipo etiquetado |
+|---|---|---|---|---|
+| 0,15 | 0–2 s | 10 % | 1 % | 46 % |
+| | 2–4 s | 9 % | 1 % | 52 % |
+| | 4–8 s | 12 % | 0 % | 58 % |
+| | 8–15 s | 12 % | 0 % | 86 % |
+| | > 15 s | 15 % | 0 % | 89 % |
+| 0,5 | 0–2 / 2–4 / 4–8 s | 19 / 16 / 20 % | 4–5 % | 36 / 54 / 59 % |
+| 1,0 | 0–2 / 2–4 / 4–8 s | 11 / 13 / 19 % | 13–20 % | 47 / 53 / 56 % |
+
+Cambios de control como detector de cambios de posesión (contacto 0,15): *recall* 46 % frente a un
+31 % de azar, con una precisión del **9–12 %**. Segmentar la posesión por control da como mucho un
+spellF1 de 0,435, frente a 0,510 del pre-etiquetador.
+
+**Resultado negativo.** En las posesiones largas, el detector confirma el equipo etiquetado (86–89 %),
+así que la asignación de equipo funciona. En las de menos de 8 s, quien está en contacto con el balón
+es el equipo etiquetado solo la mitad de las veces, con cualquier umbral. Hay dos explicaciones
+compatibles:
+
+1. **La convención del GT**: el GT marca el cambio cuando el balón queda suelto tras la
+   intercepción. Muchas posesiones cortas son fases de balón dividido, en las que el equipo "nuevo"
+   no llega a controlar el balón de forma visible.
+2. **La asignación de equipo falla en los duelos**: con jugadores de los dos equipos a menos de 3 m,
+   el jugador del ATD más cercano a los pies de la caja puede ser el rival. Distinguir por el color
+   de la camiseta lo resolvería, pero no arregla la explicación 1.
+
+Las detecciones de jugadores no se usan en ningún modelo, así que no entran en
+`enrich/artefacts.sha256`.
+
+## 15. Siguientes pasos
+
+1. **Aceptar el techo actual** (~0,51 frente a 0,44 de v1) y montar la entrega. Seis vías distintas
+   (decodificador, pesos, toques del tracking, toques del vídeo, regla de toques, control con
+   cajas) no recuperan las posesiones cortas.
+2. Entrega por *cross-fitting* (regla 1): cada bloque etiquetado se predice con el modelo que no lo
    vio, y el resto del partido con el modelo entrenado con todo. `prelabel_oof.csv` ya sigue ese
    esquema.
+3. Opcional, solo si sobra tiempo: equipo por color de camiseta para los duelos (explicación 2).
