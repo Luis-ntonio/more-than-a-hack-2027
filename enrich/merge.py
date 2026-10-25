@@ -103,9 +103,9 @@ SWEEP = [{}, {"conf_min": 0.5}, {"conf_min": 0.7}, {"max_speed_ms": 25.0}, {"min
          {"conf_seed": 0.8}, {"conf_min": 0.5, "min_run": 8}]
 
 
-def simulate(p, homography, atd, scale):
+def simulate(p, homography, atd, scale, suffix=""):
     """Hide the ATD ball on windows where it is known, refill them, and score against the ATD."""
-    path = os.path.join(OUT_DIR, "{}_ball_detections_windows.npz".format(GAME))
+    path = os.path.join(OUT_DIR, "{}_ball_detections_windows{}.npz".format(GAME, suffix))
     if not os.path.isfile(path):
         raise SystemExit("missing {}: run enrich.detect_ball --mode windows".format(path))
     z = np.load(path)
@@ -155,10 +155,13 @@ def main():
         parser.add_argument("--" + key.replace("_", "-"), type=type(value), default=value)
     parser.add_argument("--simulate", action="store_true",
                         help="score the gap filling on windows where the ATD ball is known")
+    parser.add_argument("--windows-suffix", default="",
+                        help="simulate on <game>_ball_detections_windows<suffix>.npz")
     args = parser.parse_args()
     p = {key: getattr(args, key) for key in PARAMS}
     if args.simulate:
-        return simulate(p, load_homography(), load_atd(), np.array(PITCH, dtype=np.float64))
+        return simulate(p, load_homography(), load_atd(), np.array(PITCH, dtype=np.float64),
+                        args.windows_suffix)
 
     det_path = os.path.join(OUT_DIR, "{}_ball_detections.npz".format(GAME))
     if not os.path.isfile(det_path):

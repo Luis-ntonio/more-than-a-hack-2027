@@ -30,7 +30,7 @@ import numpy as np
 
 from enrich.geometry import pixels_to_pitch
 from games import GAME, video_path
-from possession.io import CACHE_DIR, PITCH, ROOT, graded_blocks, load_atd, load_homography
+from possession.io import CACHE_DIR, FPS, PITCH, ROOT, graded_blocks, load_atd, load_homography
 
 OUT_DIR = os.path.join(CACHE_DIR, "enriched")
 WEIGHTS = os.path.join(ROOT, "models", "football-ball-detection.pt")
@@ -173,7 +173,7 @@ def calibrate(args, atd, homography):
     print("calibration: {} graded frames where the ATD has the ball (seed {})".format(
         len(sample), args.seed))
     for tiling in args.tilings:
-        detector = BallDetector(WEIGHTS, tiling, args.conf)
+        detector = BallDetector(args.weights, tiling, args.conf)
         det = run(detector, sample, args.batch, tiling)
         dist = np.full((len(sample), TOP_K), np.nan)
         for i, frame in enumerate(sample):
@@ -235,12 +235,12 @@ def detect_missing(args, atd):
     if args.limit:
         wanted = wanted[:args.limit]
     print("{} graded frames without ATD ball".format(len(wanted)))
-    detector = BallDetector(WEIGHTS, args.tilings[0], args.conf)
+    detector = BallDetector(args.weights, args.tilings[0], args.conf)
     det = run(detector, wanted, args.batch, args.tilings[0])
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, "{}_ball_detections.npz".format(GAME))
     np.savez_compressed(out, frames=wanted.astype(np.int32), det=det)
-    with open(WEIGHTS, "rb") as handle:
+    with open(args.weights, "rb") as handle:
         weights_sha = hashlib.sha256(handle.read()).hexdigest()
     with open(out[:-len(".npz")] + "_meta.json", "w") as handle:
         json.dump({"tiling": args.tilings[0], "conf": args.conf, "top_k": TOP_K,
@@ -257,7 +257,7 @@ def detect_visible(args, atd):
     if args.limit:
         wanted = wanted[:args.limit]
     print("{} graded frames with ATD ball".format(len(wanted)))
-    detector = BallDetector(WEIGHTS, args.tilings[0], args.conf)
+    detector = BallDetector(args.weights, args.tilings[0], args.conf)
     det = run(detector, wanted, args.batch, args.tilings[0])
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, "{}_ball_detections_visible.npz".format(GAME))
@@ -272,7 +272,11 @@ def detect_windows(args, atd):
     length = args.window
     visible = np.isfinite(atd["ball"][:, 0])
     starts = []
-    for _, first, last in graded_blocks():
+    for half, first, last in graded_blocks():
+        if args.last_min:  # only the last minutes of the 2nd half (enrich.finetune_ball's held-out)
+            if half != 2:
+                continue
+            first = max(first, last - args.last_min * 60 * FPS)
         ok = visible[first:last + 1]
         csum = np.concatenate(([0], np.cumsum(ok)))
         full = np.flatnonzero(csum[length + 1:] - csum[:-length - 1] == length + 1) + first
@@ -287,10 +291,10 @@ def detect_windows(args, atd):
     chosen = np.sort(np.array(chosen))
     wanted = np.concatenate([np.arange(s + 1, s + 1 + length) for s in chosen])
     print("{} windows of {} frames ({} frames)".format(len(chosen), length, len(wanted)))
-    detector = BallDetector(WEIGHTS, args.tilings[0], args.conf)
+    detector = BallDetector(args.weights, args.tilings[0], args.conf)
     det = run(detector, wanted, args.batch, args.tilings[0])
     os.makedirs(OUT_DIR, exist_ok=True)
-    out = os.path.join(OUT_DIR, "{}_ball_detections_windows.npz".format(GAME))
+    out = os.path.join(OUT_DIR, "{}_ball_detections_windows{}.npz".format(GAME, args.suffix))
     np.savez_compressed(out, anchors=chosen.astype(np.int32), length=length,
                         frames=wanted.astype(np.int32), det=det)
     print("-> " + os.path.relpath(out, ROOT))
@@ -305,15 +309,20 @@ def main():
     parser.add_argument("--batch", type=int, default=8, help="frames per GPU batch")
     parser.add_argument("--sample", type=int, default=2000, help="calibrate: frames to check")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--weights", default=WEIGHTS,
+                        help="detector weights (models/football-ball-detection-ft.pt: enrich.finetune_ball)")
     parser.add_argument("--diagnose", action="store_true",
                         help="calibrate: test frame alignment and look for fixed false positives")
     parser.add_argument("--limit", type=int, default=0, help="missing, visible: only the first N (smoke test)")
     parser.add_argument("--n-windows", type=int, default=40, help="windows: how many stretches")
     parser.add_argument("--window", type=int, default=125, help="windows: frames per stretch")
+    parser.add_argument("--last-min", type=int, default=0,
+                        help="windows: draw them from the last N minutes of the 2nd half only")
+    parser.add_argument("--suffix", default="", help="windows: appended to the output file name")
     args = parser.parse_args()
     args.tilings = args.tilings or (list(TILINGS) if args.mode == "calibrate" else ["tiles640"])
-    if not os.path.isfile(WEIGHTS):
-        raise SystemExit("missing {}: run  bash enrich/download_models.sh".format(WEIGHTS))
+    if not os.path.isfile(args.weights):
+        raise SystemExit("missing {}: run  bash enrich/download_models.sh".format(args.weights))
     atd = load_atd()
     if args.mode == "calibrate":
         calibrate(args, atd, load_homography())

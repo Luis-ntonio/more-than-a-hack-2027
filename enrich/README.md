@@ -88,3 +88,43 @@ docker compose run --rm dev sha256sum -c enrich/artefacts.sha256
 ```
 
 Si se regenera alguno, hay que actualizar el manifiesto, y el resultado puede cambiar.
+
+## Afinado del detector con este partido (`enrich/finetune_ball.py`): no mejora el relleno
+
+```bash
+docker compose run --rm gpu python -m enrich.finetune_ball dataset    # ~57 min
+docker compose run --rm gpu python -m enrich.finetune_ball train      # 17 épocas, 3,8 h (parada anticipada)
+docker compose run --rm gpu python -m enrich.finetune_ball evaluate
+docker compose run --rm gpu python -m enrich.detect_ball --mode windows --last-min 20 --suffix _held_orig
+docker compose run --rm gpu python -m enrich.detect_ball --mode windows --last-min 20 --suffix _held_ft \
+    --weights models/football-ball-detection-ft.pt
+docker compose run --rm dev python -m enrich.merge --simulate --windows-suffix _held_orig   # y _held_ft
+```
+
+**Etiquetas sin mano humana.** El balón del ATD se proyecta en la imagen con la homografía. Como el
+ATD no tiene altura, solo se usa un frame si un candidato del detector original está a menos de 1 m
+del balón del ATD (caja de ese candidato, el 85 % de los frames) o si el balón va a menos de 2 m/s,
+es decir, por el suelo (caja proyectada, el 15 %). Hay 42 417 frames etiquetables; se usan 8 000 para
+entrenar y 1 000 para validar. Los **últimos 20 min de la 2ª parte** quedan fuera, con 1 min de
+separación, para evaluar.
+
+**Evaluación en el tramo reservado** (2 000 frames con balón del ATD, troceado `tiles640`):
+
+| modelo | detecta algo | top-1 < 1 m | top-1 < 2 m | top-5 < 2 m | top-1 < 5 m |
+|---|---|---|---|---|---|
+| original | 100 % | 39,1 % | 52,2 % | **61,8 %** | 65,6 % |
+| afinado | 87,5 % | **43,6 %** | **57,8 %** | 59,2 % | **71,0 %** |
+
+**De punta a punta, relleno de huecos simulado** (`merge --simulate`, 40 ventanas de 5 s, todas del
+tramo reservado):
+
+| detecciones | rellena | acierto < 2 m (de lo rellenado) | acierto < 2 m (de todo) |
+|---|---|---|---|
+| original | 75,8 % | 72,1 % | **54,6 %** |
+| afinado | 72,4 % | 74,1 % | 53,7 % |
+| afinado + original (candidatos combinados) | 70,3 % | 72,9 % | 51,3 % |
+
+El afinado pone el balón en primer lugar más a menudo, pero propone menos candidatos, y `merge` ya
+elegía bien entre los 5 primeros. El resultado de punta a punta es un empate, y la combinación es
+peor. **Se mantiene el modelo original**: las detecciones de `enrich/artefacts.sha256` no cambian.
+El modelo afinado queda en `models/football-ball-detection-ft.pt` (gitignored).

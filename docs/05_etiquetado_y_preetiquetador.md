@@ -382,3 +382,10 @@ Las detecciones de jugadores no se usan en ningún modelo, así que no entran en
    vio, y el resto del partido con el modelo entrenado con todo. `prelabel_oof.csv` ya sigue ese
    esquema.
 3. Opcional, solo si sobra tiempo: equipo por color de camiseta para los duelos (explicación 2).
+
+## 16. Afinado del detector de balón con este partido
+
+Detalle en `enrich/README.md`. Se afinó con etiquetas sacadas del ATD, sin etiquetas a mano, y se
+evaluó en los últimos 20 min de la 2ª parte, que quedaron fuera del entrenamiento. El candidato
+principal acierta más (57,8 % frente a 52,2 % a menos de 2 m), pero en el relleno de huecos simulado
+empata (53,7 % frente a 54,6 % del total). Se mantiene el detector original.
