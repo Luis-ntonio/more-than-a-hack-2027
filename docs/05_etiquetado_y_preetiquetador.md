@@ -244,14 +244,50 @@ es el del jugador más cercano. Se mide sobre los 11 bloques (55 min, 109 cambio
 **Conclusión: la información para las posesiones cortas no está en el tracking.** Para recuperarlas
 hay que sacar los toques del vídeo.
 
-## 11. Siguientes pasos
+## 11. Toques con el balón del vídeo (fase 1)
 
-1. Toques desde el vídeo: trayectoria del balón detectado en píxeles, sin suavizar (Roboflow ya lo
-   detecta, frame a frame) y cajas reales de jugadores con un detector de jugadores, para medir la
-   distancia balón–jugador en la imagen. Primero, rehacer esta tabla con el balón detectado en los
-   frames donde lo hay, para ver si el *recall* sube antes de invertir en el detector de jugadores.
+```bash
+docker compose run --rm gpu python -m enrich.detect_ball --mode visible   # 94 214 frames, 106 min
+docker compose run --rm dev python analysis/touch_signal.py --ball detected
+docker compose run --rm dev python analysis/touch_signal.py --ball hybrid
+```
+
+`--mode visible` pasa el detector por todos los frames calificados que tienen balón del tracking.
+Con `--mode missing`, cubre todo el partido. El "balón detectado" es, en cada frame, el candidato
+más cercano al balón del tracking (a menos de 3 m), y en los huecos del tracking, el que tomó
+`merge`. El híbrido usa el detectado donde lo hay y el del tracking en el resto.
+
+- El detector encuentra el balón del tracking a menos de 3 m en el **60 %** de los frames, a una
+  mediana de 0,68 m de él.
+- Se añaden dos medidas:
+  - **azar**: el mismo *recall* con la ventana desplazada 3 s del cambio, para ver cuánto es casualidad;
+  - **confirmado**: un toque del rival seguido de otro toque del mismo equipo en menos de 3 s, antes
+    de que toque el otro equipo. Separa "controla" de "desvía".
+
+Umbral 35° / 3 m/s / 2,5 m:
+
+| balón | toques/min | cambios con toque | azar | precisión | precisión confirmado | cambios que conserva |
+|---|---|---|---|---|---|---|
+| tracking | 12,3 | 48 % | 25 % | 40 % | 52 % | 40 % |
+| **detectado** | 27,3 | 53 % | 35 % | 38 % | **54 %** | **75 %** |
+| híbrido | 43,9 | 84 % | 53 % | 34 % | 43 % | 79 % |
+
+- **Solos, los toques apenas superan al azar**: con más toques por minuto, el azar también sube. El
+  híbrido parece muy bueno (84 %), pero la mitad es casualidad, y al alternar entre dos fuentes que
+  difieren 0,68 m crea giros falsos.
+- **Lo que sí funciona es la confirmación con el balón detectado**: la precisión sube del 38 % al
+  54 % y se conserva el 75 % de los cambios verdaderos. Con el tracking, confirmar solo conserva el
+  40 %, porque ve muy pocos toques. El balón del vídeo sí trae información que el tracking no tiene.
+- Aun así, casi la mitad de los toques confirmados del rival no son un cambio. Como variable del
+  modelo puede ayudar; como regla, no.
+
+## 12. Siguientes pasos
+
+1. Añadir al pre-etiquetador variables del balón detectado: último y siguiente toque **confirmado**
+   y el tiempo desde y hasta él. Medirlo con la misma validación dejando un bloque fuera. Esto hace
+   que el modelo dependa de la inferencia en GPU, así que antes hay que decidir el punto 3.
 2. Entrega por *cross-fitting* (regla 1): cada bloque etiquetado se predice con el modelo que no lo
    vio, y el resto del partido con el modelo entrenado con todo. `prelabel_oof.csv` ya sigue ese
    esquema.
-3. Decidir si la entrega usa el balón enriquecido con Roboflow (GPU): para la regla 3 hay que
-   comprobar que es determinista o fijar su salida como artefacto.
+3. Decidir si la entrega usa detecciones de Roboflow (GPU): para la regla 3 hay que comprobar que
+   son deterministas o fijar su salida como artefacto.

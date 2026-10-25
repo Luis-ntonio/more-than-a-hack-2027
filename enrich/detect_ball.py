@@ -9,6 +9,8 @@ calibrate  a seeded sample of graded frames where the ATD *does* have the ball, 
 missing    every graded frame where the ATD has no ball. Writes the top-K candidates per frame
            (pixels + confidence) to cache/enriched/<game>_ball_detections.npz; merge.py decides
            which of them become ball positions.
+visible    every graded frame where the ATD does have the ball, to <game>_ball_detections_visible.npz.
+           With missing it covers the whole match: the detector's unsmoothed path, for touches.
 windows    seeded stretches where the ATD has the ball on every frame, saved separately so that
            `merge --simulate` can hide the ATD ball and measure how well the gap filling recovers
            it. Same optimism caveat as calibrate.
@@ -247,6 +249,23 @@ def detect_missing(args, atd):
     print("frames with >=1 candidate: {:.1%} -> {}".format(with_det.mean(), os.path.relpath(out, ROOT)))
 
 
+def detect_visible(args, atd):
+    """Detections on every graded frame that has an ATD ball: with --mode missing, the whole match.
+    The detector's ball is not smoothed, so its path shows touches the ATD's does not."""
+    graded = graded_frames()
+    wanted = graded[np.isfinite(atd["ball"][graded, 0])]
+    if args.limit:
+        wanted = wanted[:args.limit]
+    print("{} graded frames with ATD ball".format(len(wanted)))
+    detector = BallDetector(WEIGHTS, args.tilings[0], args.conf)
+    det = run(detector, wanted, args.batch, args.tilings[0])
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out = os.path.join(OUT_DIR, "{}_ball_detections_visible.npz".format(GAME))
+    np.savez_compressed(out, frames=wanted.astype(np.int32), det=det)
+    print("frames with >=1 candidate: {:.1%} -> {}".format(np.isfinite(det[:, 0, 2]).mean(),
+                                                         os.path.relpath(out, ROOT)))
+
+
 def detect_windows(args, atd):
     """Detections on contiguous stretches with the ATD ball visible, plus the frame before each."""
     rng = np.random.default_rng(args.seed)
@@ -279,7 +298,7 @@ def detect_windows(args, atd):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mode", choices=["calibrate", "missing", "windows"], required=True)
+    parser.add_argument("--mode", choices=["calibrate", "missing", "visible", "windows"], required=True)
     parser.add_argument("--tilings", nargs="+", choices=list(TILINGS), default=None,
                         help="calibrate: which to compare (default all); missing: the first is used")
     parser.add_argument("--conf", type=float, default=0.05, help="keep candidates above this")
@@ -288,7 +307,7 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--diagnose", action="store_true",
                         help="calibrate: test frame alignment and look for fixed false positives")
-    parser.add_argument("--limit", type=int, default=0, help="missing: only the first N (smoke test)")
+    parser.add_argument("--limit", type=int, default=0, help="missing, visible: only the first N (smoke test)")
     parser.add_argument("--n-windows", type=int, default=40, help="windows: how many stretches")
     parser.add_argument("--window", type=int, default=125, help="windows: frames per stretch")
     args = parser.parse_args()
@@ -300,6 +319,8 @@ def main():
         calibrate(args, atd, load_homography())
     elif args.mode == "windows":
         detect_windows(args, atd)
+    elif args.mode == "visible":
+        detect_visible(args, atd)
     else:
         detect_missing(args, atd)
 
