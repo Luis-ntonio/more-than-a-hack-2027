@@ -281,13 +281,60 @@ Umbral 35° / 3 m/s / 2,5 m:
 - Aun así, casi la mitad de los toques confirmados del rival no son un cambio. Como variable del
   modelo puede ayudar; como regla, no.
 
-## 12. Siguientes pasos
+## 12. Variables de toque en el pre-etiquetador
 
-1. Añadir al pre-etiquetador variables del balón detectado: último y siguiente toque **confirmado**
-   y el tiempo desde y hasta él. Medirlo con la misma validación dejando un bloque fuera. Esto hace
-   que el modelo dependa de la inferencia en GPU, así que antes hay que decidir el punto 3.
-2. Entrega por *cross-fitting* (regla 1): cada bloque etiquetado se predice con el modelo que no lo
+`possession/touches.py` reúne la detección de toques sobre el balón del vídeo (la misma que mide
+`analysis/touch_signal.py`) y saca 14 variables por frame:
+
+- equipo del último y del siguiente toque, y del último y siguiente toque **confirmado**;
+- segundos desde y hasta cada uno;
+- si coinciden;
+- tiempo desde y hasta el último "cambio confirmado": un toque confirmado de un equipo distinto al
+  del anterior.
+
+```bash
+docker compose run --rm dev python -m possession.prelabel --touches
+docker compose run --rm dev python analysis/touch_rule.py
+```
+
+| variante (validación dejando un bloque fuera, 11 bloques) | spellF1 medio | correcciones | posesiones (verdad 158) |
+|---|---|---|---|
+| pre-etiquetador | 0,510 | 244 | 117 |
+| pre-etiquetador `--touches` | 0,512 | 234 | — |
+| regla: equipo = último toque confirmado (frames vivos del pre-etiquetador) | 0,475 | — | 158 |
+| la misma regla, ignorando cambios de menos de 2 s | 0,493 | — | 140 |
+
+- **Las variables de toque no aportan** (+0,002, dentro del ruido). En las posesiones de menos de
+  8 s, `p_team` sigue en 0,39–0,59 (`analysis/short_possessions.py`). El clasificador no logra
+  separar los toques buenos de los malos: la precisión del 54 % no basta.
+- **La regla por toques acierta el número de posesiones** (158, igual que la verdad), pero las coloca
+  peor: la mitad de sus cambios son falsos.
+- `--touches` queda como opción y no se usa por defecto.
+
+**Conclusión de las secciones 6–12**: con el tracking y el balón del vídeo, ni el decodificador, ni
+los pesos, ni los toques recuperan las posesiones cortas. Lo que falta es saber *quién controla* el
+balón, no solo quién está cerca cuando cambia de trayectoria.
+
+## 13. Artefacto fijo de detecciones (regla 3, opción b)
+
+La inferencia en GPU no se regenera en la entrega. Las detecciones y el ATD enriquecido son un
+artefacto fijo, verificado con `enrich/artefacts.sha256`:
+
+```bash
+docker compose run --rm dev sha256sum -c enrich/artefacts.sha256
+```
+
+Ojo: el pre-etiquetador por defecto ya depende de este artefacto, porque usa el ATD enriquecido
+(`rich_*`, `ball_source`, `ball_conf`). Con el artefacto verificado, `prelabel` es determinista:
+dos ejecuciones dan las mismas 244 correcciones.
+
+## 14. Siguientes pasos
+
+1. **Detector de jugadores en el vídeo** (fase 2): si el balón está *pegado* a un jugador en la
+   imagen y no solo cerca en el suelo, se sabe quién lo controla. Es lo único que ataca de verdad la
+   precisión de los toques.
+2. Alternativa sin GPU: aceptar el techo actual (~0,51 frente a 0,44 de v1) y centrar el trabajo en
+   la entrega.
+3. Entrega por *cross-fitting* (regla 1): cada bloque etiquetado se predice con el modelo que no lo
    vio, y el resto del partido con el modelo entrenado con todo. `prelabel_oof.csv` ya sigue ese
    esquema.
-3. Decidir si la entrega usa detecciones de Roboflow (GPU): para la regla 3 hay que comprobar que
-   son deterministas o fijar su salida como artefacto.

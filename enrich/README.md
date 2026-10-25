@@ -14,6 +14,7 @@ docker compose run --rm gpu bash enrich/download_models.sh            # pesos ->
 docker compose run --rm gpu python -m enrich.detect_ball --mode calibrate --diagnose   # ~3 min
 docker compose run --rm gpu python -m enrich.detect_ball --mode missing               # ~75 min
 docker compose run --rm gpu python -m enrich.detect_ball --mode windows               # ~6 min
+docker compose run --rm gpu python -m enrich.detect_ball --mode visible               # ~106 min, para los toques
 docker compose run --rm dev python -m enrich.merge --simulate                         # elegir parámetros
 docker compose run --rm dev python -m enrich.merge                                    # escribe la copia
 ```
@@ -77,3 +78,13 @@ frames calificados. Se rellena el 67 % de los frames sin balón.
 - En la misma GPU, el resultado es estable.
 - La entrega debe regenerarse en la misma máquina o con la misma GPU. Si no se puede garantizar,
   hay que decidir si la submission final usa el ATD enriquecido o solo el original.
+
+## Artefacto fijo (entrega)
+
+La entrega no vuelve a pasar el detector: usa estos archivos tal cual, verificados por SHA-256.
+
+```bash
+docker compose run --rm dev sha256sum -c enrich/artefacts.sha256
+```
+
+Si se regenera alguno, hay que actualizar el manifiesto, y el resultado puede cambiar.

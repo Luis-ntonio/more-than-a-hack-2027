@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 from possession import features as feats
+from possession import touches as touch_features
 from possession.io import (AWAY, FPS, GAME, GAMES, HOME, PITCH, ROOT, graded_blocks,
                            kickoff_frames, load_atd, load_homography)
 from possession.models import V1_PARAMS, _apply_prekickoff_rule, dead_probability, decode, team_logit
@@ -50,8 +51,9 @@ N_ROUNDS = 300
 
 # -- features ------------------------------------------------------------------------------------
 
-def frame_features():
-    """(n, k) per-frame feature matrix and names, from the original and the enriched ATD."""
+def frame_features(use_touches=False):
+    """(n, k) per-frame feature matrix and names, from the original and the enriched ATD, plus
+    ball touches from the detector's ball (possession.touches) if use_touches."""
     homography = load_homography()
     atd = load_atd()
     base = feats.compute(atd, homography)
@@ -104,6 +106,14 @@ def frame_features():
     add("cx_diff", cols["home_cx"] - cols["away_cx"])
     kickoffs = kickoff_frames()
     add("half2", np.arange(len(step)) >= kickoffs[2] - 10 * 60 * FPS)
+    if use_touches:
+        if touch_features.available():
+            tracking = feats.clean_ball(atd["ball"].astype(np.float64) * np.array(PITCH))
+            for name, values in touch_features.features(tracking).items():
+                add(name, values)
+        else:
+            print("  (no detections on the ATD's ball frames: run enrich.detect_ball --mode visible"
+                  " for the touch features)")
 
     # window summaries: the "context around frame n"
     for name in ("atd_visible", "rich_visible", "rich_diff", "v1_team_logit", "v1_p_dead",
@@ -226,12 +236,15 @@ def score_block(truth_block, pred_block):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-cv", action="store_true", help="skip leave-one-block-out scoring")
+    parser.add_argument("--touches", action="store_true",
+                        help="add touch features from the video detector's ball (needs the GPU "
+                             "detections; neutral in leave-one-block-out, docs/05 section 12)")
     parser.add_argument("--no-shift", action="store_true",
                         help="train on hand labels as saved, without moving them onto the GT's timing")
     args = parser.parse_args()
 
     n_frames = GAMES[GAME]["n_video_frames"]
-    X, names = frame_features()
+    X, names = frame_features(use_touches=args.touches)
     blocks = training_blocks(shift=not args.no_shift)
     print("training blocks: " + ", ".join("{} ({:.1f} min)".format(b[0], (b[2] - b[1] + 1) / FPS / 60)
                                           for b in blocks) + "   (* = started from a model)")

@@ -3,7 +3,7 @@
     docker compose run --rm dev python analysis/touch_signal.py
 
 A touch is a frame where the ball turns by more than ANGLE degrees or changes speed by more than
-DSPEED m/s between the WINDOW frames before and after it, with a player within RADIUS m; its team
+DSPEED m/s between the 5 frames before and after it, with a player within RADIUS m; its team
 is the nearest player's. Run over the public GT and every finished hand-labelled block (moved onto
 the GT's timing), it prints aggregates only:
   - recall: share of true possession changes (H<->A) with a touch by the new team within +-TOL
@@ -26,87 +26,26 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from analysis.gt_changes import per_frame  # noqa: E402
-from enrich.geometry import pixels_to_pitch  # noqa: E402
-from labeler.overlay import ENRICHED_DIR  # noqa: E402
-from possession.io import AWAY, FPS, GAME, HOME, PITCH, load_atd, load_homography  # noqa: E402
+from possession import touches as tf  # noqa: E402
+from possession.io import AWAY, FPS, HOME  # noqa: E402
 from possession.prelabel import training_blocks  # noqa: E402
 
-WINDOW = 5                       # frames each side for the before / after velocity
 TOL = FPS                        # a touch this close to a change counts for it
 SETTINGS = [                     # (angle deg, dspeed m/s, radius m)
     (25, 3.0, 1.5), (35, 3.0, 1.5), (50, 4.0, 1.5), (35, 3.0, 2.5), (35, 3.0, 4.0),
 ]
 BUCKETS_S = (0, 2, 4, 8, 15, np.inf)
-CONFIRM_S = 3                    # a rival touch followed by another of its team this soon
+CONFIRM_S = tf.CONFIRM_S
 CHANCE_S = 3                    # the recall test repeated this far from each change: chance level
-MATCH_M = 3.0                   # --ball detected: a candidate this close to the ATD ball is it
-
-
-def touches(f, angle, dspeed, radius):
-    """Per-frame touch team (HOME, AWAY, or -1), at most one touch per WINDOW frames."""
-    ball = f["ball"]
-    n = len(ball)
-    before = np.full((n, 2), np.nan)
-    after = np.full((n, 2), np.nan)
-    before[WINDOW:] = (ball[WINDOW:] - ball[:-WINDOW]) * FPS / WINDOW
-    after[:-WINDOW] = (ball[WINDOW:] - ball[:-WINDOW]) * FPS / WINDOW
-    sb, sa = np.linalg.norm(before, axis=1), np.linalg.norm(after, axis=1)
-    cos = np.einsum("ij,ij->i", before, after) / np.maximum(sb * sa, 1e-9)
-    turn = (sb > 1.0) & (sa > 1.0) & (cos < np.cos(np.radians(angle)))
-    kick = np.abs(sa - sb) > dspeed
-    d_home, d_away = f["d"][HOME], f["d"][AWAY]
-    nearest = np.fmin(d_home, d_away)
-    event = (turn | kick) & (nearest < radius)
-    team = np.where(event, np.where(d_home <= d_away, HOME, AWAY), -1)
-    # keep the first frame of each run of events
-    keep = event & ~np.concatenate(([False], event[:-1]))
-    last = -WINDOW
-    for i in np.flatnonzero(keep):
-        if i - last < WINDOW:
-            keep[i] = False
-        else:
-            last = i
-    return np.where(keep, team, -1)
 
 
 def code(label):
     return {"H": HOME, "A": AWAY}.get(label, -1)
 
 
-def detected_ball(f):
-    """The detector's ball in metres: where the ATD has a ball, the candidate nearest to it (within
-    MATCH_M); where it has none, the ball merge.py took from the detector. NaN elsewhere."""
-    scale = np.array(PITCH, dtype=np.float64)
-    homography = load_homography()
-    ball = np.full_like(f["ball"], np.nan)
-    z = np.load(os.path.join(ENRICHED_DIR, "{}_ball_detections_visible.npz".format(GAME)))
-    for frame, cands in zip(z["frames"], z["det"]):
-        cands = cands[np.isfinite(cands[:, 2])]
-        if not len(cands) or not np.isfinite(f["ball"][frame, 0]):
-            continue
-        x, y = pixels_to_pitch(homography[frame], cands[:, 0], cands[:, 1])
-        xy = np.stack([x, y], axis=1) * scale
-        dist = np.linalg.norm(xy - f["ball"][frame], axis=1)
-        best = int(np.nanargmin(dist)) if np.isfinite(dist).any() else None
-        if best is not None and dist[best] < MATCH_M:
-            ball[frame] = xy[best]
-    rich = load_atd(enriched=True)
-    from_detector = rich["ball_source"] == 2
-    ball[from_detector] = rich["ball"][from_detector].astype(np.float64) * scale
-    return ball
-
-
 def with_ball(f, ball):
     """per_frame()'s dict with another ball: nearest-player distances recomputed."""
-    atd = load_atd()
-    players = atd["players"][:, :, :2].astype(np.float64) * np.array(PITCH, dtype=np.float64)
-    dist = np.linalg.norm(players - ball[:, None, :], axis=2)
-    dist = np.where(np.isfinite(dist), dist, np.inf)
-    d = {}
-    for team in (HOME, AWAY):
-        d[team] = dist[:, atd["team"] == team].min(axis=1)
-        d[team][~np.isfinite(d[team])] = np.nan
-    return dict(f, ball=ball, d=d, visible=np.isfinite(ball[:, 0]))
+    return dict(f, ball=ball, d=tf.team_distances(ball), visible=np.isfinite(ball[:, 0]))
 
 
 def main():
@@ -119,11 +58,11 @@ def main():
     f = per_frame()
     if args.ball != "tracking":
         tracking = f["ball"]
-        detected = detected_ball(f)
+        detected = tf.detected_ball(f["ball"])
         both = np.isfinite(tracking[:, 0])
         matched = both & np.isfinite(detected[:, 0])
         print("detector ball on {:.0%} of the frames with a tracking ball (within {} m of it), "
-              "median {:.2f} m apart".format(matched.sum() / both.sum(), MATCH_M,
+              "median {:.2f} m apart".format(matched.sum() / both.sum(), tf.MATCH_M,
                                               np.median(np.linalg.norm(detected[matched] - tracking[matched], axis=1))))
         if args.ball == "hybrid":
             detected = np.where(np.isfinite(detected[:, :1]), detected, tracking)
@@ -132,7 +71,7 @@ def main():
     minutes = sum(last - first + 1 for _, first, last, _ in blocks) / FPS / 60
     print("{} blocks, {:.0f} min".format(len(blocks), minutes))
     for angle, dspeed, radius in SETTINGS:
-        team = touches(f, angle, dspeed, radius)
+        team = tf.touches(f["ball"], f["d"], angle, dspeed, radius)
         found = {b: [0, 0] for b in BUCKETS_S[:-1]}
         rival, rival_true, own = 0, 0, 0
         chance = [0, 0]
