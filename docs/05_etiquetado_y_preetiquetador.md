@@ -551,3 +551,54 @@ Variables:
 Cada fuente da una mejora pequeña y del mismo signo en las tres medidas, pero juntas no se suman, y
 todas las diferencias caen dentro del ruido entre bloques. Quedan como opciones y no se usan por
 defecto. El repo público no incluye la alineación, que es un dato derivado: `cache/`.
+
+## 20. Cinco semillas, modelo del broadcast y juez
+
+```bash
+for seed in 0 1 2 3 4; do
+  docker compose run --rm dev python -m possession.prelabel --seed $seed            # y --tagging, --broadcast
+done
+docker compose run --rm dev python -m possession.stack --seed 0
+```
+
+### ¿Son reales las mejoras de la sección 19?
+
+Validación dejando un bloque fuera, 11 bloques, con 5 semillas de LightGBM (bagging y muestreo de
+variables):
+
+| variante | spellF1 (media de 5 semillas) | rango entre semillas | macroF1 | correcciones |
+|---|---|---|---|---|
+| pre-etiquetador | 0,512 | 0,508–0,515 | 0,803 | 241 |
+| `--tagging` | 0,514 | 0,497–0,525 | **0,816** | 241 |
+| `--broadcast` | 0,512 | 0,494–0,524 | 0,809 | **231** |
+| `--broadcast --tagging` | 0,515 | 0,509–0,519 | 0,810 | 235 |
+
+- **En spellF1 no hay mejora**: +0,000 a +0,003, por debajo de la variación entre semillas (0,004–0,012).
+  El +0,011 de la sección 19 era la semilla 0.
+- **En macroF1 sí**, y en todas las semillas: el tagging +0,013 y el broadcast +0,006. Ayudan con el
+  balón muerto y el equipo frame a frame, no con la estructura de las posesiones.
+- El broadcast ahorra ~10 correcciones en todas las variantes que lo usan.
+
+### Modelo del broadcast y juez (`possession/stack.py`)
+
+- **Modelo del broadcast**: el mismo par de LightGBM, pero solo con lo que ve el broadcast en directo
+  (28 columnas): distancias del balón de su ATD a cada equipo, si ve el balón, cuántos jugadores ve,
+  su estado y ventanas de contexto. NaN cuando no está en directo.
+- **Juez**: otro par de LightGBM, simple (8 hojas, 200 muestras mínimas por hoja). Recibe las
+  probabilidades de los dos modelos, sus medias a 1 y 3 s, sus diferencias, el estado del broadcast,
+  el coste del emparejamiento y cuánto se disputa el balón en cada vista.
+- **Validación**: para cada bloque `k`, los dos modelos base se entrenan sin él. El juez se entrena
+  con las probabilidades fuera de muestra de los otros bloques, y se aplica con las del pliegue `k`.
+  Hay un sesgo optimista pequeño: los modelos base que dieron esas probabilidades sí vieron `k`.
+
+| variante (semilla 0) | spellF1 | macroF1 | posesiones (verdad 158) |
+|---|---|---|---|
+| táctico | 0,510 | 0,803 | 120 |
+| broadcast solo | 0,363 | 0,700 | 157 |
+| media de los dos | 0,499 | 0,803 | 107 |
+| juez | 0,511 | 0,806 | 102 |
+
+Un primer juez, con los parámetros del pre-etiquetador (31 hojas), sacó 0,474 porque sobreajustaba.
+El juez simple empata con el táctico: gana en 6 bloques y pierde en 5. **El ángulo del broadcast no
+aporta información sobre los cambios de posesión que el táctico no tenga.** Por sí solo es débil,
+porque solo ve parte del campo, con planos cerrados y un tercio de frames sin homografía.

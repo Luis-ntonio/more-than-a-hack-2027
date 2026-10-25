@@ -249,6 +249,8 @@ def score_block(truth_block, pred_block):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--no-cv", action="store_true", help="skip leave-one-block-out scoring")
+    parser.add_argument("--seed", type=int, default=LGB_PARAMS["seed"],
+                        help="LightGBM seed (bagging and feature sampling)")
     parser.add_argument("--broadcast", action="store_true",
                         help="add features from the broadcast mapped onto the tactical timeline "
                              "(run python -m possession.broadcast first)")
@@ -264,6 +266,7 @@ def main():
     parser.add_argument("--no-shift", action="store_true",
                         help="train on hand labels as saved, without moving them onto the GT's timing")
     args = parser.parse_args()
+    LGB_PARAMS["seed"] = args.seed
 
     n_frames = GAMES[GAME]["n_video_frames"]
     X, names = frame_features(use_touches=args.touches, use_control=args.control,
