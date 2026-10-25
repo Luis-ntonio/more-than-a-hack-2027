@@ -54,14 +54,15 @@ N_ROUNDS = 300
 
 # -- features ------------------------------------------------------------------------------------
 
-def frame_features(use_touches=False, use_control=False, use_tagging=False, use_broadcast=False):
+def frame_features(use_touches=False, use_control=False, use_tagging=True, use_broadcast=False,
+                   enriched=True):
     """(n, k) per-frame feature matrix and names, from the original and the enriched ATD, plus
     ball touches from the detector's ball (possession.touches) if use_touches."""
     homography = load_homography()
     atd = load_atd()
     base = feats.compute(atd, homography)
     try:
-        rich_atd = load_atd(enriched=True)
+        rich_atd = load_atd(enriched=enriched)
         rich = feats.compute(rich_atd, homography)
         source = rich_atd["ball_source"].astype(np.float64)
         conf = np.nan_to_num(rich_atd["ball_conf"].astype(np.float64), nan=0.0)
@@ -251,11 +252,15 @@ def main():
     parser.add_argument("--no-cv", action="store_true", help="skip leave-one-block-out scoring")
     parser.add_argument("--seed", type=int, default=LGB_PARAMS["seed"],
                         help="LightGBM seed (bagging and feature sampling)")
+    parser.add_argument("--ball-broadcast", action="store_true",
+                        help="use the enriched ATD that also takes the ball from the broadcast video "
+                             "(enrich.merge --broadcast)")
     parser.add_argument("--broadcast", action="store_true",
                         help="add features from the broadcast mapped onto the tactical timeline "
                              "(run python -m possession.broadcast first)")
-    parser.add_argument("--tagging", action="store_true",
-                        help="add Smart Tagging features (possession.smart_tagging)")
+    parser.add_argument("--no-tagging", action="store_true",
+                        help="leave out the Smart Tagging features (possession.smart_tagging); "
+                             "they lift macroF1 by 0.013 over five seeds, spellF1 unchanged")
     parser.add_argument("--control", action="store_true",
                         help="add ball-control features from the video's player boxes (needs "
                              "enrich.detect_players and enrich.jersey_team; covers the labelled "
@@ -270,7 +275,8 @@ def main():
 
     n_frames = GAMES[GAME]["n_video_frames"]
     X, names = frame_features(use_touches=args.touches, use_control=args.control,
-                              use_tagging=args.tagging, use_broadcast=args.broadcast)
+                              use_tagging=not args.no_tagging, use_broadcast=args.broadcast,
+                              enriched="broadcast" if args.ball_broadcast else True)
     blocks = training_blocks(shift=not args.no_shift)
     print("training blocks: " + ", ".join("{} ({:.1f} min)".format(b[0], (b[2] - b[1] + 1) / FPS / 60)
                                           for b in blocks) + "   (* = started from a model)")

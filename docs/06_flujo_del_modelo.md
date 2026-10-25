@@ -23,11 +23,11 @@ qué sale y qué se evalúa. Los resultados y los experimentos están en
  └──────┬───────┘   │ rellenados con YOLO   │   └──────────────┬───────────────┘
         │           └──────────┬────────────┘                  │
         └──────────┬───────────┘                               │
-                   │ (2) variables por frame (140 columnas)    │
+                   │ (2) variables por frame (158 columnas)    │
                    ▼                                           │
         ┌───────────────────────┐                              │
         │ matriz X (n frames ×  │◄─────────── entrenamiento ───┘
-        │ 140), possession/     │
+        │ 158), possession/     │
         │ prelabel.py           │
         └──────────┬────────────┘
                    │ (4) dos LightGBM → P(muerto), P(local | vivo)
@@ -88,7 +88,7 @@ Hay herramientas de visión **experimentales que no usa el modelo por defecto**:
 
 ### (2) Variables por frame — `possession/prelabel.py: frame_features()`
 
-140 columnas por frame:
+158 columnas por frame:
 
 - **23 directas:**
   - visibilidad del balón (ATD y enriquecido) y longitud del hueco;
@@ -102,9 +102,18 @@ Hay herramientas de visión **experimentales que no usa el modelo por defecto**:
 - **117 de contexto:** 13 de esas señales, promediadas en ventanas de 0,5, 2 y 5 s **centradas, hacia
   atrás y hacia delante** (13 × 3 × 3). Es el "qué pasa alrededor del frame n".
 
-Opciones que añaden fuentes: `--tagging` (smart tagging, `possession/smart_tagging.py`) y
-`--broadcast` (el broadcast alineado con el táctico, `possession/broadcast.py`, que hay que ejecutar
-antes). Cada una sube el spellF1 de 0,510 a 0,521, pero juntas no se suman (05, sección 19).
+- **18 del smart tagging**, por defecto (`possession/smart_tagging.py`; `--no-tagging` las quita):
+  - el equipo que implica cada código de fase;
+  - segundos desde y hasta el inicio de un balón parado, su tipo y su equipo;
+  - segundos desde y hasta un gol.
+
+  Con 5 semillas suben el macroF1 de 0,803 a 0,816 y no cambian el spellF1 (05, secciones 19–20).
+
+En total son **158 columnas**.
+
+Opciones: `--broadcast` (el broadcast alineado con el táctico, `possession/broadcast.py`) y
+`--ball-broadcast` (el balón detectado también en el vídeo del broadcast). Las dos son neutras con 5
+semillas (05, secciones 20–21).
 
 Las variables base salen de `possession/features.py: compute()`, una vez con el ATD original y otra
 con el enriquecido. Opciones experimentales: `--touches` añade 14 variables de toques del balón del

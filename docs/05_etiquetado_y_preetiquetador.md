@@ -602,3 +602,50 @@ Un primer juez, con los parámetros del pre-etiquetador (31 hojas), sacó 0,474 
 El juez simple empata con el táctico: gana en 6 bloques y pierde en 5. **El ángulo del broadcast no
 aporta información sobre los cambios de posesión que el táctico no tenga.** Por sí solo es débil,
 porque solo ve parte del campo, con planos cerrados y un tercio de frames sin homografía.
+
+## 21. El balón visto desde el broadcast (`enrich/detect_ball_broadcast.py`)
+
+```bash
+docker compose run --rm gpu python -m enrich.detect_ball_broadcast calibrate
+docker compose run --rm gpu python -m enrich.detect_ball_broadcast gaps --tiling full1280   # 19 365 frames
+docker compose run --rm dev python -m enrich.merge --broadcast        # -> *_atd_enriched_bc.npz
+docker compose run --rm dev python -m possession.prelabel --ball-broadcast
+```
+
+La idea: el broadcast enseña menos campo y más de cerca, así que el balón se ve más grande. El
+detector se pasa por el frame del broadcast que muestra en directo cada frame del táctico (sección
+19), y sus candidatos se proyectan al campo con la homografía **del broadcast**.
+
+**Calibración** (2 000 frames con balón del ATD táctico que el broadcast muestra en directo):
+
+| detector | detecta algo | top-1 < 2 m | top-5 < 2 m | top-1 < 5 m |
+|---|---|---|---|---|
+| vídeo táctico, original (`tiles640`) | 100 % | 58,2 % | **71,5 %** | 69,1 % |
+| broadcast, original `tiles640` | 98,4 % | 57,1 % | 66,5 % | 68,8 % |
+| **broadcast, original `full1280`** | 95,8 % | **63,7 %** | 67,0 % | **77,0 %** |
+| broadcast, afinado `full1280` | 83,9 % | 62,8 % | 63,2 % | 74,9 % |
+
+En el broadcast el candidato principal acierta más, sobre todo procesando la imagen entera a 1280
+px, porque el balón es más grande. El modelo afinado con el táctico no aporta nada aquí.
+
+**Cobertura.** Hay 19 365 frames calificados sin balón del ATD táctico que el broadcast muestra en
+directo (el 30 % de los huecos). De los 9 967 que el detector táctico no rellenaba, solo el 29 %
+tiene en el broadcast un candidato con confianza ≥ 0,3 dentro del campo. En el 46 %, todos sus
+candidatos caen fuera del campo. Son huecos difíciles desde los dos ángulos: balón fuera, en el aire
+o muerto.
+
+**`merge --broadcast`** junta los candidatos de los dos vídeos en cada hueco, y el rastreador elige el
+que encaja con la trayectoria (`ball_source = 4` si viene del broadcast). Se rellena el **49,8 %** de
+los frames sin balón, frente al 48,7 % sin broadcast. El broadcast aporta el 4,7 %, pero la mayoría
+sustituye a candidatos tácticos.
+
+**Resultado** (validación dejando un bloque fuera, 11 bloques, 5 semillas, con el tagging ya por
+defecto):
+
+| | spellF1 | macroF1 | correcciones |
+|---|---|---|---|
+| pre-etiquetador | 0,514 | 0,816 | 241 |
+| `--ball-broadcast` | 0,518 | 0,817 | 242 |
+
+Mejora en 4 bloques y empeora en 2, con una diferencia media de +0,003: es neutro. Queda como
+opción, y el artefacto fijo (`enrich/artefacts.sha256`) no cambia.

@@ -23,7 +23,7 @@ from enrich.geometry import pixels_to_pitch
 from games import GAME
 from possession.io import FPS, PITCH, ROOT, graded_blocks, load_atd, load_homography
 
-SOURCE_NONE, SOURCE_ATD, SOURCE_DETECTOR, SOURCE_INTERP = 0, 1, 2, 3
+SOURCE_NONE, SOURCE_ATD, SOURCE_DETECTOR, SOURCE_INTERP, SOURCE_BROADCAST = 0, 1, 2, 3, 4
 PARAMS = {
     "conf_min": 0.30,       # below this a candidate is ignored (set from calibrate's precision)
     "conf_seed": 0.50,      # starting a track with nothing to anchor it needs more confidence
@@ -54,8 +54,9 @@ def candidates_in_metres(det, frames, homography, p):
 
 
 def track_gap(cands, anchor, anchor_age, p):
-    """Greedy forward pass over one gap. Returns (len, 3) accepted x/y/conf, NaN where none."""
-    accepted = np.full((len(cands), 3), np.nan)
+    """Greedy forward pass over one gap. Returns (len, c) accepted candidate rows (x/y/conf and any
+    extra columns, such as where it came from), NaN where none."""
+    accepted = np.full((len(cands), cands.shape[2]), np.nan)
     last, age = anchor, anchor_age
     for i, frame_cands in enumerate(cands):
         age += 1
@@ -155,6 +156,9 @@ def main():
         parser.add_argument("--" + key.replace("_", "-"), type=type(value), default=value)
     parser.add_argument("--simulate", action="store_true",
                         help="score the gap filling on windows where the ATD ball is known")
+    parser.add_argument("--broadcast", action="store_true",
+                        help="also use the ball detected in the broadcast video (enrich."
+                             "detect_ball_broadcast gaps); writes <game>_atd_enriched_bc.npz")
     parser.add_argument("--windows-suffix", default="",
                         help="simulate on <game>_ball_detections_windows<suffix>.npz")
     args = parser.parse_args()
@@ -177,8 +181,21 @@ def main():
     source = np.where(np.isfinite(ball_m[:, 0]), SOURCE_ATD, SOURCE_NONE).astype(np.int8)
     conf = np.where(source == SOURCE_ATD, 1.0, np.nan)
 
-    cands = np.full((n, det.shape[1], 3), np.nan)
-    cands[frames] = candidates_in_metres(det, frames, homography, p)
+    # candidate rows: x, y (metres), conf, and 1 if it comes from the broadcast video
+    k = det.shape[1]
+    cands = np.full((n, 2 * k if args.broadcast else k, 4), np.nan)
+    cands[frames, :k, :3] = candidates_in_metres(det, frames, homography, p)
+    cands[frames, :k, 3] = 0.0
+    if args.broadcast:
+        zb = np.load(os.path.join(OUT_DIR, "{}_ball_detections_broadcast.npz".format(GAME)))
+        bc = np.concatenate([zb["pitch"].astype(np.float64) * scale, zb["det"][:, :, 2:3]], axis=2)
+        m = p["margin_m"]
+        bad = ((bc[:, :, 2] < p["conf_min"]) | ~np.isfinite(bc[:, :, 0])
+               | (bc[:, :, 0] < -m) | (bc[:, :, 0] > scale[0] + m)
+               | (bc[:, :, 1] < -m) | (bc[:, :, 1] > scale[1] + m))
+        bc[bad] = np.nan
+        cands[zb["frames"], k:, :3] = bc
+        cands[zb["frames"], k:, 3] = 1.0
 
     graded = np.zeros(n, dtype=bool)
     for _, first, last in graded_blocks():
@@ -192,13 +209,13 @@ def main():
         hit = np.isfinite(accepted[:, 2])
         ball_m[start:stop][hit] = accepted[hit, :2]
         conf[start:stop][hit] = accepted[hit, 2]
-        source[start:stop][hit] = SOURCE_DETECTOR
+        source[start:stop][hit] = np.where(accepted[hit, 3] > 0.5, SOURCE_BROADCAST, SOURCE_DETECTOR)
 
     ball_m, source = interpolate_holes(ball_m, source, p)
     ball_m[~graded & (source == SOURCE_INTERP)] = np.nan   # only enrich graded frames
     source[~graded & (source == SOURCE_INTERP)] = SOURCE_NONE
 
-    out = os.path.join(OUT_DIR, "{}_atd_enriched.npz".format(GAME))
+    out = os.path.join(OUT_DIR, "{}_atd_enriched{}.npz".format(GAME, "_bc" if args.broadcast else ""))
     np.savez_compressed(out, players=atd["players"], team=atd["team"],
                         ball=(ball_m / scale).astype(np.float32), ball_source=source,
                         ball_conf=conf.astype(np.float32))
@@ -209,6 +226,9 @@ def main():
     for start, stop in gaps:
         gap_len[start:stop] = (stop - start) / FPS
     filled = missing & (source >= SOURCE_DETECTOR)
+    if args.broadcast:
+        print("from the broadcast video: {:.1%} of missing".format(
+            (missing & (source == SOURCE_BROADCAST)).sum() / missing.sum()))
     print("graded frames: {}   ATD ball missing: {} ({:.1%})".format(
         int(graded.sum()), int(missing.sum()), missing.sum() / graded.sum()))
     print("filled: {:.1%} of missing  (detector {:.1%}, interpolated {:.1%})".format(

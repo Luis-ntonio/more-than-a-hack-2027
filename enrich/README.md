@@ -128,3 +128,12 @@ El afinado pone el balón en primer lugar más a menudo, pero propone menos cand
 elegía bien entre los 5 primeros. El resultado de punta a punta es un empate, y la combinación es
 peor. **Se mantiene el modelo original**: las detecciones de `enrich/artefacts.sha256` no cambian.
 El modelo afinado queda en `models/football-ball-detection-ft.pt` (gitignored).
+
+## Balón del broadcast (`enrich/detect_ball_broadcast.py`)
+
+Pasa el detector por el vídeo del broadcast en los frames que muestran en directo un hueco del
+táctico (alineación: `possession/broadcast.py`) y proyecta los candidatos con la homografía del
+broadcast. El candidato principal acierta más que en el vídeo táctico (63,7 % frente a 58,2 % a
+menos de 2 m, con `full1280`). Aun así, `merge --broadcast` solo sube el relleno del 48,7 % al
+49,8 %, y el modelo de posesión no mejora (docs/05, sección 21). Escribe archivos aparte
+(`*_ball_detections_broadcast.npz`, `*_atd_enriched_bc.npz`) que no forman parte del artefacto fijo.

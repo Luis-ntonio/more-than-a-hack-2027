@@ -39,7 +39,9 @@ def load_atd(game=GAME, enriched=False, source="tactical"):
     ball_conf added.
     """
     if enriched:
-        path = os.path.join(CACHE_DIR, "enriched", "{}_atd_enriched.npz".format(game))
+        # enriched="broadcast": the copy that also uses the ball seen in the broadcast video
+        suffix = "_bc" if enriched == "broadcast" else ""
+        path = os.path.join(CACHE_DIR, "enriched", "{}_atd_enriched{}.npz".format(game, suffix))
         if not os.path.isfile(path):
             raise SystemExit("missing {}: run python -m enrich.merge".format(path))
         z = np.load(path)

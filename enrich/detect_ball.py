@@ -130,8 +130,9 @@ def read_frames(path, wanted, depth=64):
         yield item
 
 
-def run(detector, wanted, batch, label):
-    """Detections for every frame in `wanted`, in order. Prints throughput only."""
+def run(detector, wanted, batch, label, video=None):
+    """Detections for every frame in `wanted` (of `video`, default the tactical one), in order.
+    Prints throughput only."""
     out = np.full((len(wanted), TOP_K, 4), np.nan, dtype=np.float32)
     pending, index, started = [], 0, time.time()
 
@@ -144,7 +145,7 @@ def run(detector, wanted, batch, label):
         index += len(pending)
         pending.clear()
 
-    for frame, image in read_frames(video_path(), wanted):
+    for frame, image in read_frames(video or video_path(), wanted):
         if image is None:
             image = np.zeros((1080, 1920, 3), dtype=np.uint8)  # undecodable: detects nothing
         pending.append((frame, image))
