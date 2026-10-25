@@ -11,7 +11,9 @@ the pre-labels land where the GT would put the changes; --no-shift trains on the
 
 It is a labelling aid, not the submission: it is trained on hand labels of this very match.
 Reports leave-one-block-out scores and correction counts (aggregates only) so the team can see
-whether it saves work compared with v1.
+whether it saves work compared with v1. It also writes evaluation/results/prelabel_oof.csv: the
+full-data prediction with every labelled block replaced by the prediction of the model that did not
+see it, so scoring it against the hand labels is an honest out-of-sample number.
 """
 import argparse
 import json
@@ -34,6 +36,7 @@ from labeler.timing import shifted_changes  # noqa: E402
 LABELS_DIR = os.path.join(ROOT, "labels")
 PUBLIC_GT = os.path.join(ROOT, "evaluation", "gt", "{}_possession_gt_public.csv".format(GAME))
 OUT = os.path.join(ROOT, "evaluation", "results", "prelabel.csv")
+OOF_OUT = os.path.join(ROOT, "evaluation", "results", "prelabel_oof.csv")
 WINDOWS_S = (0.5, 2.0, 5.0)
 TRAIN_STRIDE = 5          # neighbouring frames are near-duplicates; every 5th is plenty
 MATCH_TOL = FPS           # a predicted change within 1 s of the true one counts as right
@@ -172,7 +175,8 @@ def fit(X, blocks):
     return dead_model, team_model
 
 
-def predict(models, X, n_frames):
+def probabilities(models, X, n_frames):
+    """Per-frame P(dead) and P(home | alive) on the graded frames, 0.5 elsewhere."""
     dead_model, team_model = models
     graded = np.zeros(n_frames, dtype=bool)
     for _, first, last in graded_blocks():
@@ -180,7 +184,11 @@ def predict(models, X, n_frames):
     p_dead, p_home = np.full(n_frames, 0.5), np.full(n_frames, 0.5)
     p_dead[graded] = dead_model.predict(X[graded])
     p_home[graded] = team_model.predict(X[graded])
-    return decode(p_dead, p_home, n_frames, V1_PARAMS)
+    return p_dead, p_home
+
+
+def predict(models, X, n_frames):
+    return decode(*probabilities(models, X, n_frames), n_frames, V1_PARAMS)
 
 
 # -- evaluation ----------------------------------------------------------------------------------
@@ -245,9 +253,11 @@ def main():
         print("{:<8} {:>9} {:>9} {:>9} | {:>11} {:>11}".format(
             "block", "spellF1", "macroF1", "v1 spell", "edits pre", "edits v1"))
         totals = np.zeros(3)
+        oof = {}
         for k, (name, first, last, labels) in enumerate(blocks_cv):
             models = fit(X, blocks_cv[:k] + blocks_cv[k + 1:])
             pred = predict(models, X, n_frames)[first:last + 1]
+            oof[(first, last)] = pred
             res, edits, n_true, _ = score_block(labels, pred)
             res_v1, edits_v1, _, _ = score_block(labels, v1_labels[first:last + 1])
             totals += (edits, edits_v1, n_true)
@@ -257,9 +267,17 @@ def main():
         print("total edits: pre-labeller {:.0f}, v1 {:.0f}  (true changes {:.0f})".format(*totals))
 
     models = fit(X, blocks)
-    labels = _apply_prekickoff_rule(predict(models, X, n_frames))
+    full = predict(models, X, n_frames)
+    labels = _apply_prekickoff_rule(full.copy())
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     pd.DataFrame({"frame": np.arange(n_frames), "label": labels}).to_csv(OUT, index=False)
+    if not args.no_cv:
+        for (first, last), pred in oof.items():
+            full[first:last + 1] = pred
+        oof_labels = _apply_prekickoff_rule(full)
+        pd.DataFrame({"frame": np.arange(n_frames), "label": oof_labels}).to_csv(OOF_OUT, index=False)
+        print("out-of-fold copy (labelled blocks predicted by the model that did not see them) -> "
+              + os.path.relpath(OOF_OUT, ROOT))
     graded = np.concatenate([labels[f:l + 1] for _, f, l in graded_blocks()])
     print("\nfull match: {:.1%} D, {} feature columns -> {}".format(
         np.mean(graded == "D"), len(names), os.path.relpath(OUT, ROOT)))

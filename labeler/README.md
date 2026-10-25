@@ -84,6 +84,7 @@ shift.
 ## Corregir sobre un modelo en vez de empezar de cero
 
 1. En la barra superior, elige **Modelo**:
+
    - `v1` para los primeros bloques;
    - `prelabel` en cuanto el pre-etiquetador gane a v1 (ver más abajo).
 
@@ -92,6 +93,7 @@ shift.
 2. Pulsa **Partir de la predicción**. Sus cambios se copian al bloque. Si el bloque ya tenía
    etiquetas, pide un segundo clic para no borrar trabajo por accidente.
 3. Revisa los cambios de uno en uno:
+
    - `]` salta al siguiente.
    - Mira el clip de contexto.
    - Si está bien, sigue; si está desplazado, muévelo con `Alt`+flechas; si sobra, bórralo con
@@ -113,6 +115,9 @@ docker compose run --rm dev python -m possession.prelabel
 - Entrena con la GT pública más todos los bloques marcados como terminados, ya desplazados al
   timing del GT, y escribe `evaluation/results/prelabel.csv`. Aparece en el selector de modelos sin
   reiniciar nada.
+- Escribe también `evaluation/results/prelabel_oof.csv`: cada bloque etiquetado lo predice el modelo
+  que no lo vio. Es la fila honesta al puntuar contra vuestras etiquetas; `prelabel` está entrenado
+  con ellas. Resultados en `docs/05_etiquetado_y_preetiquetador.md`.
 - Volved a ejecutarlo cada vez que terminéis uno o dos bloques.
 - Imprime, por bloque, cuántas correcciones habrían hecho falta con él y con v1 (añadir, mover o
   borrar cambios). Cuando el total del pre-etiquetador sea claramente menor, pasad a usarlo.
