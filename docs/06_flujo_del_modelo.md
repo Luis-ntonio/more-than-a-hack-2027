@@ -176,10 +176,13 @@ Además, `prelabel` imprime su propia validación dejando un bloque fuera, bloqu
 
 ## 4. Resultados actuales
 
-| | spellF1 (validación dejando un bloque fuera, 11 bloques) | correcciones necesarias |
-|---|---|---|
-| **pre-etiquetador** | **0,510** | 244 |
-| v1 (sin entrenar) | 0,438 | 346 |
+| | spellF1 (validación dejando un bloque fuera, 11 bloques, media de 5 semillas) | macroF1 | correcciones necesarias |
+|---|---|---|---|
+| **pre-etiquetador** (con smart tagging) | **0,514** | **0,816** | 241 |
+| v1 (sin entrenar) | 0,438 | 0,764 * | 346 |
+
+\* El macroF1 de v1 sale del scoreboard contra los 10 bloques a mano (sección 9 de 05), no de la
+validación dejando un bloque fuera, porque v1 no se entrena.
 
 El defecto conocido es que **se come las posesiones cortas** (< 8 s): predice ~117 posesiones donde
 hay 158. Se probaron nueve vías para recuperarlas, sin éxito (05, secciones 6–18).
