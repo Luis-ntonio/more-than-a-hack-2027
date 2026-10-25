@@ -267,7 +267,7 @@ def main():
                              "blocks only, so it is an experiment: docs/05)")
     parser.add_argument("--touches", action="store_true",
                         help="add touch features from the video detector's ball (needs the GPU "
-                             "detections; neutral in leave-one-block-out, docs/05 section 12)")
+                             "detections; neutral in leave-one-block-out, docs/05 §4.4)")
     parser.add_argument("--no-shift", action="store_true",
                         help="train on hand labels as saved, without moving them onto the GT's timing")
     args = parser.parse_args()

@@ -1,163 +1,82 @@
-# 05 · Etiquetado a mano y pre-etiquetador
+# 05 · Etiquetado a mano, pre-etiquetador y experimentos
 
-Estado al 24-10-2026: **40 min de la 1ª parte y 15 min de la 2ª etiquetados** (bloques
-`1T-00`…`1T-07` y `2T-00`…`2T-02`, todos desde cero, anotador `luis`). Las secciones 1–8 son con los
-40 min de la 1ª parte; la 9 añade la 2ª. Las etiquetas están solo en el repo privado de etiquetas; aquí van solo
-cifras agregadas.
+**Estado (25-10-2026).** Hay 55 min etiquetados a mano: el bloque público y 10 bloques de 5 min
+(`1T-01`…`1T-07` y `2T-00`…`2T-02`), todos desde cero, anotador `luis`. Las etiquetas están solo en el
+repo privado de etiquetas; aquí van solo cifras agregadas. El flujo completo del modelo está en
+[06](06_flujo_del_modelo.md).
+
+## Resumen
+
+**Modelo actual**: el pre-etiquetador (`possession/prelabel.py`). Son dos LightGBM sobre 158
+variables por frame (tracking, balón enriquecido con Roboflow y smart tagging) más el HMM de v1.
+
+| | spellF1 | macroF1 | correcciones | posesiones (verdad 158) |
+|---|---|---|---|---|
+| **pre-etiquetador** (media de 5 semillas) | **0,514** | **0,816** | 241 | ~120 |
+| v1 (sin entrenar) | 0,438 | — | 346 | — |
+
+Las cifras salen de validar dejando un bloque fuera: cada bloque se predice con un modelo que no lo
+vio. Hay 11 bloques. Contra los 10 bloques a mano (144 posesiones), las diferencias de spellF1
+menores de ~0,14 son ruido.
+
+**Su defecto**: se come las **posesiones cortas** (< 8 s), que son la mitad de todas. Un equipo
+defiende, recupera el balón en su campo, lo saca 10–20 m y lo vuelve a perder. Sobre los límites
+reales de la posesión la señal es clara, pero frame a frame casi no se ve (§3).
+
+**Lo que se probó para recuperarlas o mejorar el modelo:**
+
+| prueba | § | spellF1 (base ≈ 0,51) | veredicto |
+|---|---|---|---|
+| corregir el desfase del anotador al entrenar | 1 | público 0,413 → 0,538 | **en uso** |
+| ajustar los costes del HMM | 4.1 | 0,521 (anidado) | no ayuda |
+| ponderar frames por 1/duración de la posesión | 4.2 | 0,482–0,488 | no ayuda |
+| toques en el balón del tracking | 4.2–4.3 | 0,507 | no ayuda |
+| toques en el balón del vídeo (`--touches`) | 4.4 | 0,512 | neutro, opción |
+| regla: equipo = último toque confirmado | 4.4 | 0,475–0,493 | peor |
+| control del balón con cajas de jugadores | 4.5 | ≤ 0,435 como regla | peor |
+| equipo por color de camiseta (`--control`) | 4.6 | 0,502 | neutro, opción |
+| afinar el detector de balón con este partido | 4.7 | — (el relleno empata) | descartado |
+| detectar posesiones cortas como segmentos | 4.8 | 0,49–0,51 | no ayuda |
+| **smart tagging** | 4.9 | 0,514 (macroF1 +0,013) | **en uso** |
+| broadcast alineado como variables (`--broadcast`) | 4.10 | 0,512 (macroF1 +0,006) | neutro, opción |
+| modelo del broadcast + juez | 4.11 | 0,511 | neutro |
+| balón detectado en el broadcast (`--ball-broadcast`) | 4.12 | 0,518 | neutro, opción |
+
+**Conclusión**: el tracking y los dos vídeos dan casi toda la información frame a frame. Las
+posesiones cortas fallan porque **hay que encontrar sus límites**, no por falta de señal sobre quién
+está cerca del balón.
 
 ```bash
-docker compose run --rm dev python -m labeler.timing                       # desfase frente al GT
-docker compose run --rm dev python -m possession.prelabel                  # entrena + validación cruzada
-docker compose run --rm dev python -m possession.prelabel --no-shift       # igual, sin corregir el desfase
+docker compose run --rm dev python -m labeler.timing                 # desfase frente al GT
+docker compose run --rm dev python -m possession.prelabel            # entrena, valida, escribe prelabel*.csv
 docker compose run --rm dev python -m labeler.export --annotator luis --shift auto
 docker compose run --rm dev python evaluation/run_evaluation.py --gt labels/validation_luis.csv --bootstrap 1000
 ```
 
-## 1. Desfase del anotador frente al GT (`labeler.timing`)
+---
+
+## 1. Desfase del anotador frente al GT (`labeler/timing.py`)
 
 `1T-00` es la ventana pública: ahí se compara la etiqueta a mano con el GT oficial.
 
-| tipo de cambio | n | mediana | media | corrección aplicada |
+| tipo de cambio | n | mediana | media | corrección |
 |---|---|---|---|---|
 | a muerta (`dead`) | 4 | −1 f | −1,0 f | +1 f |
 | reanudación (`restart`) | 4 | −15 f | −16,8 f | +15 f |
 | cambio de posesión | 12 | −4,5 f | −7,2 f | +4 f |
 
-Acuerdo por frame: 97,9 %; 20 cambios emparejados, 0 omitidos, 0 de más. El anotador marca los
-cambios antes que el GT: las reanudaciones ~0,6 s antes, porque el GT las pone cuando la pelota ya
-rueda, no en el golpeo (ver `analysis/gt_changes.py`). La corrección se aplica al entrenar y al
-exportar; las etiquetas guardadas no se tocan.
+El acuerdo por frame es del 97,9 %, con 20 cambios emparejados, 0 omitidos y 0 de más. El anotador
+marca antes que el GT, y sobre todo las reanudaciones: el GT las pone cuando el balón ya rueda, no en
+el golpeo (`analysis/gt_changes.py`). La corrección se aplica al entrenar y al exportar; las
+etiquetas guardadas no cambian.
 
-## 2. ¿Sirve la corrección del desfase?
+**Sirve.** En el bloque público, el único con verdad oficial, el spellF1 de la validación pasa de
+**0,413** (sin corregir) a **0,538** (corregido), con el macroF1 igual (0,888 / 0,887). Es un solo
+bloque de 17 posesiones: una señal, no una prueba.
 
-La única comparación limpia es el bloque público, porque su verdad es el GT oficial en los dos casos
-(en los demás bloques la propia verdad cambia con el desfase).
+## 2. Medición del pre-etiquetador
 
-| bloque público (validación cruzada) | spellF1 | macroF1 |
-|---|---|---|
-| entrenado sin corregir el desfase | 0,413 | 0,888 |
-| **entrenado con el desfase corregido** | **0,538** | 0,887 |
-
-Con el timing alineado, los cambios predichos caen donde los pone el GT, y spellF1 depende de eso
-en las posesiones cortas. Es un solo bloque de 17 posesiones, así que es una señal, no una prueba.
-
-## 3. Pre-etiquetador: validación dejando un bloque fuera
-
-Cada fila se entrena con los otros 7 bloques y se puntúa en el que queda fuera. "Correcciones" son
-los cambios que habría que añadir, mover o borrar para llegar a la etiqueta.
-
-| bloque | spellF1 | macroF1 | spellF1 v1 | correcciones pre / v1 | cambios reales |
-|---|---|---|---|---|---|
-| público | 0,538 | 0,887 | 0,389 | 25 / 35 | 20 |
-| 1T-01 | 0,667 | 0,826 | 0,465 | 17 / 29 | 16 |
-| 1T-02 | 0,588 | 0,688 | 0,568 | 31 / 38 | 21 |
-| 1T-03 | 0,455 | 0,824 | 0,287 | 27 / 40 | 20 |
-| 1T-04 | 0,348 | 0,788 | 0,374 | 26 / 29 | 23 |
-| 1T-05 | 0,585 | 0,804 | 0,387 | 20 / 35 | 15 |
-| 1T-06 | 0,462 | 0,854 | 0,486 | 9 / 15 | 10 |
-| 1T-07 | 0,567 | 0,824 | 0,416 | 19 / 26 | 15 |
-| **media / total** | **0,526** | 0,812 | 0,422 | **174 / 247** | 140 |
-
-Gana a v1 en 6 de 8 bloques y ahorra un 30 % de correcciones. Las cifras son las mismas que con
-estos mismos bloques en la sesión anterior: no se ha añadido ningún bloque nuevo desde entonces.
-
-## 4. Scoreboard honesto sobre las etiquetas a mano
-
-`prelabel.py` escribe ahora también `evaluation/results/prelabel_oof.csv`: la predicción completa,
-pero con cada bloque etiquetado sustituido por la del modelo que **no** lo vio al entrenar
-(*out-of-fold*). Es la única fila comparable del scoreboard; `prelabel.csv` está entrenado con esas
-mismas etiquetas y su 0,98 es memoria, no acierto.
-
-Verdad: 7 bloques (`1T-01`…`1T-07`, 35 min, 92 posesiones de 13,2 s de media), con el desfase
-corregido.
-
-| submission | spellF1 | macroF1 | transF1 | posesiones (verdad 92) | duración media |
-|---|---|---|---|---|---|
-| prelabel (dentro de muestra, no vale) | 0,985 | 0,996 | 0,992 | 90 | 13,5 s |
-| **prelabel_oof** | **0,501** | **0,820** | **0,344** | 78 | 16,1 s |
-| v1 | 0,400 | 0,774 | 0,209 | 102 | 11,6 s |
-| v0 | 0,261 | 0,372 | 0,136 | 146 | 14,4 s |
-| baseline_smooth125 | 0,245 | 0,652 | 0,034 | 150 | 11,0 s |
-
-**Ruido: con 92 posesiones, diferencias de spellF1 por debajo de ~0,17 no son significativas**
-(bootstrap de 1000 muestras). La ventaja de +0,10 sobre v1 va en la dirección correcta y se repite
-en 6 de 8 bloques, pero todavía cabe en el ruido.
-
-## 5. Qué dicen los números
-
-- **El modelo se queda corto de posesiones**: predice 78 donde hay 92, con una duración media de 16,1
-  s frente a 13,2 s. Se come sobre todo las posesiones cortas (rebotes, intercepciones que se pierden
-  enseguida), que son justo las que más pesan en spellF1. v1 se pasa por el lado contrario (102).
-- El macroF1 (0,82) es bueno: el problema no es el equipo frame a frame, es **dónde empiezan y acaban
-  las posesiones**, sobre todo las cortas. Las secciones 6–8 muestran que no se arregla en el
-  decodificador: el clasificador no tiene evidencia en esas posesiones.
-- `1T-04` es el bloque más difícil para todos los modelos (0,35): conviene revisarlo con el
-  visualizador.
-
-## 6. Ajuste del decodificador: no ayuda
-
-Se probaron 150 combinaciones de costes de transición del HMM (cambio de equipo 4–40,
-a muerta 4–25, desde muerta 4–25 nats) sobre las probabilidades fuera de muestra de cada bloque. La
-elección es anidada: los costes con los que se puntúa un bloque se eligen sin él.
-
-| costes | spellF1 medio (8 bloques) | correcciones |
-|---|---|---|
-| v1 (25 / 15 / 15) | **0,526** | **174** |
-| mejor punto de la rejilla (40 / 4 / 25), elegido sobre los mismos bloques | 0,527 | — |
-| anidado (elegido sin el bloque) | 0,521 | 209 |
-
-La superficie es plana: ningún coste recupera las posesiones cortas. **El límite no está en el
-decodificador.**
-
-## 7. Por qué se pierden las posesiones cortas (`analysis/short_possessions.py`)
-
-Las 113 posesiones verdaderas de los 8 bloques, por duración. `p_team` es la probabilidad fuera de
-muestra del equipo correcto, y "encontrada" significa que hay una posesión predicha del mismo
-equipo con IoU ≥ 0,5.
-
-| duración | n | p_team | frames bien | balón visto | encontrada |
-|---|---|---|---|---|---|
-| 0–2 s | 18 | 0,41 | 37 % | 90 % | 0 % |
-| 2–4 s | 21 | 0,55 | 57 % | 99 % | 24 % |
-| 4–8 s | 20 | 0,56 | 55 % | 96 % | 45 % |
-| 8–15 s | 18 | 0,83 | 83 % | 98 % | 67 % |
-| 15–30 s | 25 | 0,94 | 94 % | 92 % | 80 % |
-| > 30 s | 11 | 0,94 | 95 % | 97 % | 100 % |
-
-- **La mitad de las posesiones dura menos de 8 s**, y en ellas el clasificador está al nivel del azar
-  aunque el balón se vea casi siempre. Con `p_team` ≈ 0,5 ningún decodificador puede recuperarlas.
-- Con proxies simples (scratch, solo agregados), el equipo etiquetado sí llega a menos de 1–1,5 m del
-  balón en las posesiones cortas, y "último equipo a menos de 1,5 m" acierta el 72 % de los frames
-  en las de 2–4 s. Pero solo el 51 % en las de 0–2 s, y entre el 72 % y el 85 % incluso en las largas:
-  la relación balón–jugador del tracking es ruidosa (balón proyectado al suelo, cambios de ID).
-## 8. Otras dos pruebas sin éxito
-
-Todas se puntúan igual, con validación dejando un bloque fuera y el spellF1 medio de los 8 bloques.
-
-| variante | spellF1 medio | correcciones |
-|---|---|---|
-| **pre-etiquetador original** | **0,526** | **174** |
-| + variables de toque (último y siguiente equipo a 1,5 m y 3 m, tiempo desde y hasta el toque) | 0,507 | 183 |
-| + toque + frames ponderados por duración^−0,5 de su posesión | 0,488 | — |
-| + toque + frames ponderados por duración^−1 (cada posesión pesa igual, como spellF1) | 0,482 | — |
-
-Ninguna ayuda, y todas las diferencias caen dentro del ruido. Con 8 bloques, el clasificador no
-tiene de dónde sacar las posesiones cortas: la evidencia del tracking en ellas es casi aleatoria.
-**Se quitaron del código**, y `prelabel.py` queda como estaba más la copia *out-of-fold*. El diff de
-los experimentos se guardó fuera del repo, en local.
-
-Lo que queda por probar, de mayor a menor potencial:
-- **Más datos de otro régimen**: los 15 minutos de la 2ª parte que se están etiquetando.
-- **Mejor evidencia de toque desde el vídeo**: la posición del balón en el suelo y los cambios de ID
-  del tracking limitan la relación balón–jugador. Un detector de jugadores en el vídeo (Roboflow,
-  con GPU) daría la distancia real en píxeles al balón detectado.
-- **Revisar la convención del GT para las posesiones cortas**: si el GT marca una posesión cuando el
-  balón queda "libre" tras una intercepción, puede que la señal no sea la cercanía sino el cambio de
-  dirección del balón (el toque). Se puede medir con `analysis/gt_changes.py` en las cortas.
-
-## 9. Con 15 min de la 2ª parte (11 bloques, 55 min)
-
-Validación dejando un bloque fuera: cada bloque se predice con un modelo entrenado con los otros 10.
+### 2.1 Validación dejando un bloque fuera (11 bloques, semilla 0, antes del tagging)
 
 | bloque | spellF1 | macroF1 | spellF1 v1 | correcciones pre / v1 | cambios reales |
 |---|---|---|---|---|---|
@@ -174,13 +93,46 @@ Validación dejando un bloque fuera: cada bloque se predice con un modelo entren
 | 2T-02 | 0,541 | 0,769 | 0,457 | 30 / 31 | 25 |
 | **media / total** | **0,510** | 0,803 | 0,438 | **244 / 346** | 209 |
 
-- **Funciona en la 2ª parte**: media de 0,524 en los tres bloques de la 2ª, frente a 0,483 de v1. Con
-  los equipos cambiados de lado no se cae. Ojo: cada bloque de la 2ª se entrena también con los otros
-  dos de la 2ª, así que no es una prueba pura de "entrenar en la 1ª y predecir la 2ª".
-- Gana a v1 en 9 de 11 bloques y ahorra un 30 % de correcciones (244 frente a 346), igual que antes.
-- El bloque público baja de 0,538 a 0,428 al añadir datos, y la media de la 1ª parte pasa de 0,526 a
-  0,505. Con 17–20 posesiones por bloque, esto es ruido de bloque, no un empeoramiento.
-- **Más datos no arreglan las posesiones cortas** (`analysis/short_possessions.py`, 166 posesiones):
+- Gana a v1 en 9 de 11 bloques y ahorra un 30 % de correcciones.
+- **Funciona en la 2ª parte**, con los equipos cambiados de lado: 0,524 frente a 0,483 de v1. Pero
+  cada bloque de la 2ª se entrenó también con los otros dos de la 2ª.
+- Con 8 bloques (solo la 1ª parte) la media era 0,526. Al añadir la 2ª bajó el bloque público (0,538 →
+  0,428). Con ~20 posesiones por bloque, eso es ruido.
+- `1T-04` es el bloque más difícil para todos los modelos.
+
+### 2.2 Scoreboard honesto contra las etiquetas a mano
+
+`prelabel.py` escribe dos archivos:
+
+- `prelabel.csv`: entrenado con todo. En los bloques etiquetados saca 0,99, pero es memoria: se
+  entrenó con esas mismas etiquetas.
+- `prelabel_oof.csv`: cada bloque etiquetado lo predice el modelo que no lo vio. Es la fila
+  comparable.
+
+Verdad: 10 bloques (50 min, 144 posesiones de 12,6 s de media), con el desfase corregido y bootstrap
+de 1000 muestras. Semilla 0, antes del tagging.
+
+| submission | spellF1 | macroF1 | transF1 | posesiones (verdad 144) | duración media |
+|---|---|---|---|---|---|
+| **prelabel_oof** | **0,499** | **0,812** | **0,380** | 110 | 16,6 s |
+| v1 | 0,425 | 0,764 | 0,228 | 150 | 11,8 s |
+| v0 | 0,300 | 0,386 | 0,137 | 207 | 14,5 s |
+| baseline_smooth50 | 0,263 | 0,665 | 0,111 | 299 | 7,4 s |
+
+- **Ruido**: con 144 posesiones, diferencias de spellF1 menores de ~0,14 no son significativas. La
+  ventaja sobre v1 (+0,074) va en la misma dirección en 9 de 11 bloques, pero cabe en el ruido.
+- **transF1** sí separa: 0,380 frente a 0,228. Los cambios que encuentra caen mucho más cerca del
+  frame correcto (latencia media +0,4 f frente a −2,1 f).
+- **El defecto**: 110 posesiones donde hay 144, porque se fusionan las cortas con sus vecinas. v1
+  acierta el número (150) pero las coloca peor.
+
+## 3. Diagnóstico: por qué se pierden las posesiones cortas
+
+### 3.1 El clasificador no ve las posesiones cortas (`analysis/short_possessions.py`)
+
+Las 166 posesiones verdaderas de los 11 bloques, por duración. `p_team` es la probabilidad fuera de
+muestra del equipo correcto; "encontrada" significa que hay una posesión predicha del mismo equipo
+con IoU ≥ 0,5.
 
 | duración | n | p_team | frames bien | balón visto | encontrada |
 |---|---|---|---|---|---|
@@ -191,405 +143,202 @@ Validación dejando un bloque fuera: cada bloque se predice con un modelo entren
 | 15–30 s | 35 | 0,92 | 93 % | 92 % | 71 % |
 | > 30 s | 15 | 0,89 | 90 % | 98 % | 93 % |
 
-  Con un 47 % más de datos, `p_team` en las posesiones de menos de 8 s sigue en 0,38–0,60. El cuello
-  de botella es la evidencia, no la cantidad de etiquetas.
+**La mitad de las posesiones dura menos de 8 s**, y en ellas el clasificador está casi al azar aunque
+el balón se vea casi siempre. Con `p_team` ≈ 0,5 ningún decodificador las recupera. Con 8 bloques la
+tabla era la misma: el problema no es la cantidad de etiquetas.
 
-Scoreboard sobre las etiquetas a mano: 10 bloques (`1T-01`…`2T-02`, 50 min, 144 posesiones de 12,6 s
-de media), con el desfase corregido y bootstrap de 1000 muestras.
-
-| submission | spellF1 | macroF1 | transF1 | posesiones (verdad 144) | duración media |
-|---|---|---|---|---|---|
-| prelabel (dentro de muestra, no vale) | 0,990 | 0,996 | 0,995 | 142 | 12,8 s |
-| **prelabel_oof** | **0,499** | **0,812** | **0,380** | 110 | 16,6 s |
-| v1 | 0,425 | 0,764 | 0,228 | 150 | 11,8 s |
-| v0 | 0,300 | 0,386 | 0,137 | 207 | 14,5 s |
-| baseline_smooth50 | 0,263 | 0,665 | 0,111 | 299 | 7,4 s |
-
-- La banda de ruido baja de ~0,17 a **~0,14** con 144 posesiones. La ventaja sobre v1 (+0,074) sigue
-  **dentro del ruido**, aunque va en la misma dirección en 9 de 11 bloques.
-- Donde sí hay una diferencia clara es en **transF1: 0,380 frente a 0,228**. El pre-etiquetador pone
-  los cambios que encuentra mucho más cerca del frame correcto (latencia media +0,4 f frente a
-  −2,1 f).
-- El defecto es el mismo que antes: **110 posesiones donde hay 144**, de 16,6 s de media frente a
-  12,6 s. Se fusionan las posesiones cortas con sus vecinas. v1 acierta el número (150) pero las coloca
-  peor.
-
-## 10. ¿Hay señal de toque en el tracking? (`analysis/touch_signal.py`)
-
-Un "toque" es un frame en el que el balón del tracking gira más de un ángulo o cambia de velocidad
-más de un umbral entre los 5 frames anteriores y los 5 siguientes, con un jugador cerca. Su equipo
-es el del jugador más cercano. Se mide sobre los 11 bloques (55 min, 109 cambios H↔A):
-
-- *recall*: cambios con un toque del nuevo equipo a ±1 s;
-- precisión: toques del rival que de verdad son un cambio hacia ese equipo.
-
-| umbral (giro / Δv / radio) | toques/min | recall 0–2 s | 2–4 s | 4–8 s | 8–15 s | > 15 s | precisión |
-|---|---|---|---|---|---|---|---|
-| 25° / 3 m/s / 1,5 m | 11,8 | 36 % | 57 % | 42 % | 35 % | 40 % | 42 % |
-| 35° / 3 m/s / 1,5 m | 10,1 | 36 % | 48 % | 37 % | 25 % | 36 % | 41 % |
-| 50° / 4 m/s / 1,5 m | 5,1 | 18 % | 39 % | 32 % | 10 % | 24 % | 43 % |
-| 35° / 3 m/s / 2,5 m | 12,3 | 45 % | 57 % | 53 % | 35 % | 48 % | 40 % |
-| 35° / 3 m/s / 4 m | 13,1 | 50 % | 57 % | 58 % | 30 % | 48 % | 37 % |
-
-- **El tracking no ve la mayoría de los toques.** Solo hay un toque del nuevo equipo cerca de entre el
-  35 % y el 58 % de los cambios, y no depende de la duración de la posesión: las largas también salen
-  mal. Esas se encuentran por la cercanía sostenida, no por el toque.
-- **Y no es por falta de balón.** El balón del tracking se ve en el 87 % de los frames a ±1 s de un
-  cambio; solo en el 14 % de los cambios falta más de la mitad de esa ventana. El balón está, pero su
-  trayectoria no muestra los toques: ~10–13 toques/min es muy poco para un partido. Probablemente
-  está suavizado, o pegado al suelo en los pases altos.
-- **Precisión ~40 %**: de cada 5 toques del rival, 3 no son un cambio (desvíos, duelos perdidos,
-  ruido). Una variable de toque sola no basta, y por eso las de la sección 8 no ayudaron.
-
-**Conclusión: la información para las posesiones cortas no está en el tracking.** Para recuperarlas
-hay que sacar los toques del vídeo.
-
-## 11. Toques con el balón del vídeo (fase 1)
-
-```bash
-docker compose run --rm gpu python -m enrich.detect_ball --mode visible   # 94 214 frames, 106 min
-docker compose run --rm dev python analysis/touch_signal.py --ball detected
-docker compose run --rm dev python analysis/touch_signal.py --ball hybrid
-```
-
-`--mode visible` pasa el detector por todos los frames calificados que tienen balón del tracking.
-Con `--mode missing`, cubre todo el partido. El "balón detectado" es, en cada frame, el candidato
-más cercano al balón del tracking (a menos de 3 m), y en los huecos del tracking, el que tomó
-`merge`. El híbrido usa el detectado donde lo hay y el del tracking en el resto.
-
-- El detector encuentra el balón del tracking a menos de 3 m en el **60 %** de los frames, a una
-  mediana de 0,68 m de él.
-- Se añaden dos medidas:
-  - **azar**: el mismo *recall* con la ventana desplazada 3 s del cambio, para ver cuánto es casualidad;
-  - **confirmado**: un toque del rival seguido de otro toque del mismo equipo en menos de 3 s, antes
-    de que toque el otro equipo. Separa "controla" de "desvía".
-
-Umbral 35° / 3 m/s / 2,5 m:
-
-| balón | toques/min | cambios con toque | azar | precisión | precisión confirmado | cambios que conserva |
-|---|---|---|---|---|---|---|
-| tracking | 12,3 | 48 % | 25 % | 40 % | 52 % | 40 % |
-| **detectado** | 27,3 | 53 % | 35 % | 38 % | **54 %** | **75 %** |
-| híbrido | 43,9 | 84 % | 53 % | 34 % | 43 % | 79 % |
-
-- **Solos, los toques apenas superan al azar**: con más toques por minuto, el azar también sube. El
-  híbrido parece muy bueno (84 %), pero la mitad es casualidad, y al alternar entre dos fuentes que
-  difieren 0,68 m crea giros falsos.
-- **Lo que sí funciona es la confirmación con el balón detectado**: la precisión sube del 38 % al
-  54 % y se conserva el 75 % de los cambios verdaderos. Con el tracking, confirmar solo conserva el
-  40 %, porque ve muy pocos toques. El balón del vídeo sí trae información que el tracking no tiene.
-- Aun así, casi la mitad de los toques confirmados del rival no son un cambio. Como variable del
-  modelo puede ayudar; como regla, no.
-
-## 12. Variables de toque en el pre-etiquetador
-
-`possession/touches.py` reúne la detección de toques sobre el balón del vídeo (la misma que mide
-`analysis/touch_signal.py`) y saca 14 variables por frame:
-
-- equipo del último y del siguiente toque, y del último y siguiente toque **confirmado**;
-- segundos desde y hasta cada uno;
-- si coinciden;
-- tiempo desde y hasta el último "cambio confirmado": un toque confirmado de un equipo distinto al
-  del anterior.
-
-```bash
-docker compose run --rm dev python -m possession.prelabel --touches
-docker compose run --rm dev python analysis/touch_rule.py
-```
-
-| variante (validación dejando un bloque fuera, 11 bloques) | spellF1 medio | correcciones | posesiones (verdad 158) |
-|---|---|---|---|
-| pre-etiquetador | 0,510 | 244 | 117 |
-| pre-etiquetador `--touches` | 0,512 | 234 | — |
-| regla: equipo = último toque confirmado (frames vivos del pre-etiquetador) | 0,475 | — | 158 |
-| la misma regla, ignorando cambios de menos de 2 s | 0,493 | — | 140 |
-
-- **Las variables de toque no aportan** (+0,002, dentro del ruido). En las posesiones de menos de
-  8 s, `p_team` sigue en 0,39–0,59 (`analysis/short_possessions.py`). El clasificador no logra
-  separar los toques buenos de los malos: la precisión del 54 % no basta.
-- **La regla por toques acierta el número de posesiones** (158, igual que la verdad), pero las coloca
-  peor: la mitad de sus cambios son falsos.
-- `--touches` queda como opción y no se usa por defecto.
-
-**Conclusión de las secciones 6–12**: con el tracking y el balón del vídeo, ni el decodificador, ni
-los pesos, ni los toques recuperan las posesiones cortas. Lo que falta es saber *quién controla* el
-balón, no solo quién está cerca cuando cambia de trayectoria.
-
-## 13. Artefacto fijo de detecciones (regla 3, opción b)
-
-La inferencia en GPU no se regenera en la entrega. Las detecciones y el ATD enriquecido son un
-artefacto fijo, verificado con `enrich/artefacts.sha256`:
-
-```bash
-docker compose run --rm dev sha256sum -c enrich/artefacts.sha256
-```
-
-Ojo: el pre-etiquetador por defecto ya depende de este artefacto, porque usa el ATD enriquecido
-(`rich_*`, `ball_source`, `ball_conf`). Con el artefacto verificado, `prelabel` es determinista:
-dos ejecuciones dan las mismas 244 correcciones.
-
-## 14. Control del balón con el detector de jugadores (fase 2)
-
-```bash
-docker compose run --rm gpu python -m enrich.detect_players --frames labelled   # 82 500 frames, ~40 min
-docker compose run --rm dev python analysis/control_signal.py --contact 0.15     # también 0.5 y 1.0
-```
-
-- **`enrich/detect_players.py`**: el detector de Roboflow (jugador, portero, árbitro, balón; YOLOv8x
-  a 1280 px). Detecta 24 jugadores, 1 portero y 1 árbitro de mediana por frame, y una caja de balón
-  en el 77 % de los frames.
-- **`possession/control.py`**:
-  - el equipo de cada caja es el del jugador del ATD más cercano a sus pies (≤ 3 m), y así se asigna
-    el 83 % de las cajas;
-  - el balón es la caja de balón a ≤ 3 m del balón del ATD, y hay una en el 47 % de los frames;
-  - hay "control" cuando el balón está a menos de `contact` alturas de caja de un jugador.
-
-| contacto | duración | frames con control | frames en disputa | control = equipo etiquetado |
-|---|---|---|---|---|
-| 0,15 | 0–2 s | 10 % | 1 % | 46 % |
-| | 2–4 s | 9 % | 1 % | 52 % |
-| | 4–8 s | 12 % | 0 % | 58 % |
-| | 8–15 s | 12 % | 0 % | 86 % |
-| | > 15 s | 15 % | 0 % | 89 % |
-| 0,5 | 0–2 / 2–4 / 4–8 s | 19 / 16 / 20 % | 4–5 % | 36 / 54 / 59 % |
-| 1,0 | 0–2 / 2–4 / 4–8 s | 11 / 13 / 19 % | 13–20 % | 47 / 53 / 56 % |
-
-Cambios de control como detector de cambios de posesión (contacto 0,15): *recall* 46 % frente a un
-31 % de azar, con una precisión del **9–12 %**. Segmentar la posesión por control da como mucho un
-spellF1 de 0,435, frente a 0,510 del pre-etiquetador.
-
-**Resultado negativo.** En las posesiones largas, el detector confirma el equipo etiquetado (86–89 %),
-así que la asignación de equipo funciona. En las de menos de 8 s, quien está en contacto con el balón
-es el equipo etiquetado solo la mitad de las veces, con cualquier umbral. Hay dos explicaciones
-compatibles:
-
-1. **La convención del GT**: el GT marca el cambio cuando el balón queda suelto tras la
-   intercepción. Muchas posesiones cortas son fases de balón dividido, en las que el equipo "nuevo"
-   no llega a controlar el balón de forma visible.
-2. **La asignación de equipo falla en los duelos**: con jugadores de los dos equipos a menos de 3 m,
-   el jugador del ATD más cercano a los pies de la caja puede ser el rival. Distinguir por el color
-   de la camiseta lo resolvería, pero no arregla la explicación 1.
-
-Las detecciones de jugadores no se usan en ningún modelo, así que no entran en
-`enrich/artefacts.sha256`.
-
-## 15. Siguientes pasos
-
-1. **Aceptar el techo actual** (~0,51 frente a 0,44 de v1) y montar la entrega. Seis vías distintas
-   (decodificador, pesos, toques del tracking, toques del vídeo, regla de toques, control con
-   cajas) no recuperan las posesiones cortas.
-2. Entrega por *cross-fitting* (regla 1): cada bloque etiquetado se predice con el modelo que no lo
-   vio, y el resto del partido con el modelo entrenado con todo. `prelabel_oof.csv` ya sigue ese
-   esquema.
-3. Opcional, solo si sobra tiempo: equipo por color de camiseta para los duelos (explicación 2).
-
-## 16. Afinado del detector de balón con este partido
-
-Detalle en `enrich/README.md`. Se afinó con etiquetas sacadas del ATD, sin etiquetas a mano, y se
-evaluó en los últimos 20 min de la 2ª parte, que quedaron fuera del entrenamiento. El candidato
-principal acierta más (57,8 % frente a 52,2 % a menos de 2 m), pero en el relleno de huecos simulado
-empata (53,7 % frente a 54,6 % del total). Se mantiene el detector original.
-
-## 17. Equipo por color de camiseta (`enrich/jersey_team.py`)
-
-```bash
-docker compose run --rm gpu python -m enrich.jersey_team features    # 1,95 M cajas de jugador
-docker compose run --rm gpu python -m enrich.jersey_team train
-docker compose run --rm dev python analysis/control_signal.py --jersey
-docker compose run --rm dev python -m possession.prelabel --control
-```
-
-Se pone a prueba la explicación 2 de la sección 14: que la asignación de equipo por el jugador del
-ATD falle en los duelos.
-
-- **Etiquetas, solo las claras:** el jugador del ATD más cercano a los pies de la caja está a menos de
-  1 m y no hay ningún rival a menos de 3 m. Es el 69 % de las cajas.
-- **Variables:** histograma HSV del torso sin el césped, y la media y la dispersión del color en Lab.
-  Clasificador LightGBM.
-- **Validación:** se entrena con la 1ª parte y se evalúa con la 2ª, donde los equipos han cambiado de
-  lado. La 1ª parte se predice con el modelo entrenado con la 2ª.
-
-| cajas | n | coincide con el ATD |
-|---|---|---|
-| 2ª parte, claras (acierto real) | 366 196 | **98,8 %** |
-| 2ª parte, duelos | 92 708 | 93,5 % |
-| 1ª parte, duelos | 258 482 | 89,6 % |
-
-El clasificador es fiable, y en los duelos corrige el equipo del ATD en el 6–10 % de las cajas.
-
-**Pero apenas cambia el control en las posesiones cortas.** Con el equipo por camiseta (cuando
-P < 0,1 o > 0,9, y si no, el del ATD):
-
-| posesiones de | equipo del ATD | equipo por camiseta |
-|---|---|---|
-| 0–2 s | 46 % | 46 % |
-| 2–4 s | 52 % | 56 % |
-| 4–8 s | 58 % | 62 % |
-| 8–15 s / > 15 s | 86 / 89 % | 88 / 90 % |
-| mejor segmentación por control (spellF1) | 0,435 | 0,468 |
-
-Usado como variable del pre-etiquetador (`--control`: último y siguiente equipo con control, tiempo
-desde y hasta él, y control en ventanas de 1 y 3 s), el spellF1 medio es **0,502 frente a 0,510**, con
-242 correcciones frente a 244. Es neutro.
-
-**Conclusión.** La asignación de equipo explica una parte pequeña del problema. Aun con el equipo bien
-identificado, en las posesiones de menos de 4 s quien toca el balón es el equipo etiquetado solo la
-mitad de las veces. La causa principal es la convención del GT para los balones divididos
-(explicación 1): esas posesiones no se ven como control del balón. `--control` queda como opción
-experimental: solo hay detecciones de jugadores en los bloques etiquetados.
-
-## 18. Qué es una posesión corta en el GT (`analysis/short_spell_profile.py`)
-
-```bash
-docker compose run --rm dev python analysis/short_spell_profile.py
-docker compose run --rm dev python analysis/short_spell_proposals.py --merge-f 15 --min-f 10
-```
+### 3.2 Qué es una posesión corta en el GT (`analysis/short_spell_profile.py`)
 
 Se mide el balón **sobre los límites reales** de cada posesión que sigue a una del otro equipo, desde
 el punto de vista del equipo que la gana. Se compara con ventanas de la misma duración dentro de
-posesiones largas (más de 8 s, a más de 2 s de los extremos), tomando como "nuevo" al equipo sin el
-balón. La dirección de ataque sale de la posición mediana de cada portero en cada parte.
+posesiones largas, tomando como "nuevo" al equipo sin el balón. La dirección de ataque sale de la
+posición mediana de cada portero en cada parte.
 
 | medida (2–4 s, n = 23) | corta | control | AUC |
 |---|---|---|---|
-| distancia mínima del equipo nuevo al balón | 0,29 m | 2,57 m | 0,12 (0,88 invertido) |
+| distancia mínima del equipo nuevo al balón | 0,29 m | 2,57 m | 0,88 (invertido) |
 | % de frames en que el nuevo está más cerca | 64 % | 16 % | 0,84 |
 | avance del balón hacia la portería que ataca | +11,6 m | −3,1 m | 0,82 |
-| dónde empieza (desde su propia portería) | 34 m | 63 m | 0,25 (0,75 invertido) |
+| dónde empieza (desde su propia portería) | 34 m | 63 m | 0,75 (invertido) |
 
-Las posesiones de 4–8 s son parecidas (avance +19,6 m, AUC de cercanía 0,89). Las de 0–2 s, menos
-(AUC 0,61–0,79). Después de una posesión corta, el balón vuelve al equipo anterior el 59–74 % de las
-veces, y si no, es balón muerto.
+- Las de 4–8 s son parecidas (avance +19,6 m, AUC de cercanía 0,89). Las de 0–2 s, menos (AUC
+  0,61–0,79).
+- Después, el balón vuelve al equipo anterior el 59–74 % de las veces; si no, es balón muerto.
+- **Es el patrón de un balón dividido**: el equipo que defiende recupera el balón en su campo, lo saca
+  y lo pierde. Encaja con la convención del GT, que marca el cambio cuando el balón queda suelto tras
+  la intercepción.
+- **Sobre la posesión entera la señal es clara. Frame a frame no**: el equipo nuevo está más cerca
+  solo el ~60 % del tiempo, y el HMM lo suaviza.
 
-**Qué es una posesión corta:** el equipo que defiende recupera el balón en su propia mitad, lo saca
-10–20 m y lo pierde enseguida. La señal existe, pero solo es clara cuando se conocen los límites de
-la posesión. Frame a frame es débil: el equipo nuevo está más cerca solo el ~60 % del tiempo, y el
-HMM la suaviza.
+## 4. Experimentos
 
-**Detectarlas como segmentos no funciona** (`analysis/short_spell_proposals.py`). Se proponen tramos
-en los que el equipo sin posesión según el pre-etiquetador está más cerca del balón, se describen con
-las medidas de arriba y se puntúan con LightGBM, entrenado dejando fuera el bloque que se puntúa.
+Todos se miden igual: validación dejando un bloque fuera, con la media de spellF1 de los bloques.
 
-| unión de huecos / mínimo | cortas perdidas cubiertas por una propuesta | propuestas que aciertan | AUC | spellF1 anidado |
+### 4.1 Costes del HMM
+
+Se probaron 150 combinaciones (cambio de equipo 4–40, a muerta 4–25, desde muerta 4–25 nats),
+eligiendo los costes de cada bloque sin él. Con 8 bloques:
+
+- costes de v1 (25 / 15 / 15): 0,526 y 174 correcciones;
+- mejor punto, elegido sobre los mismos bloques: 0,527;
+- anidado: 0,521 y 209 correcciones.
+
+La superficie es plana. **El límite no está en el decodificador.**
+
+### 4.2 Toques en el balón del tracking y ponderación (8 bloques)
+
+| variante | spellF1 | correcciones |
+|---|---|---|
+| pre-etiquetador | **0,526** | **174** |
+| + variables de toque (último y siguiente equipo a 1,5 m y 3 m) | 0,507 | 183 |
+| + toque + frames ponderados por duración^−0,5 de su posesión | 0,488 | — |
+| + toque + frames ponderados por duración^−1 (como spellF1) | 0,482 | — |
+
+Se quitaron del código.
+
+### 4.3 ¿Hay toques en el tracking? (`analysis/touch_signal.py`)
+
+Un "toque" es un giro o un cambio de velocidad del balón entre los 5 frames anteriores y los 5
+siguientes, con un jugador cerca. Hay 109 cambios H↔A en 11 bloques. Con el umbral 35° / 3 m/s / 2,5 m:
+
+| balón | toques/min | cambios con toque del nuevo equipo a ±1 s | azar (ventana a 3 s) | precisión | confirmado: precisión / cambios que conserva |
+|---|---|---|---|---|---|
+| tracking | 12,3 | 48 % | 25 % | 40 % | 52 % / 40 % |
+| **detectado en el vídeo** | 27,3 | 53 % | 35 % | 38 % | **54 % / 75 %** |
+| híbrido | 43,9 | 84 % | 53 % | 34 % | 43 % / 79 % |
+
+- El tracking ve muy pocos toques. Aun con el balón visible en el 87 % de los frames cerca de un
+  cambio, su trayectoria está suavizada o pegada al suelo.
+- Solos, los toques apenas superan al azar. "Confirmado" (el mismo equipo vuelve a tocar en menos de
+  3 s) separa "controla" de "desvía", y con el balón del vídeo conserva el 75 % de los cambios.
+- El híbrido parece mejor, pero la mitad es casualidad, y alternar dos fuentes crea giros falsos.
+
+El balón detectado necesita `enrich.detect_ball --mode visible` (94 214 frames, 106 min de GPU).
+
+### 4.4 Variables de toque del vídeo (`possession/touches.py`, `--touches`)
+
+Son 14 variables: último y siguiente toque, confirmado o no, tiempos y cambios de equipo confirmados.
+
+| variante (11 bloques) | spellF1 | correcciones | posesiones (verdad 158) |
+|---|---|---|---|
+| pre-etiquetador | 0,510 | 244 | 117 |
+| `--touches` | 0,512 | 234 | — |
+| regla: equipo = último toque confirmado (`analysis/touch_rule.py`) | 0,475 | — | **158** |
+| la misma regla, ignorando cambios de menos de 2 s | 0,493 | — | 140 |
+
+La regla acierta el número de posesiones, pero la mitad de sus cambios son falsos.
+
+### 4.5 Control del balón con cajas de jugadores (`enrich/detect_players.py`, `possession/control.py`)
+
+- **Detector de jugadores de Roboflow** (YOLOv8x, 1280 px) sobre los 82 500 frames etiquetados (~40 min
+  de GPU).
+- **Equipo de cada caja**: el del jugador del ATD más cercano a sus pies (≤ 3 m).
+- **Control**: el balón detectado a menos de `contact` alturas de caja de un jugador.
+
+| contacto | control = equipo etiquetado (0–2 / 2–4 / 4–8 / 8–15 / > 15 s) |
+|---|---|
+| 0,15 | 46 / 52 / 58 / 86 / 89 % |
+| 0,5 | 36 / 54 / 59 / — / — % |
+| 1,0 | 47 / 53 / 56 / — / — % |
+
+- En las posesiones largas, el detector confirma el equipo.
+- En las cortas, quien toca el balón es el equipo etiquetado la mitad de las veces.
+- Como detector de cambios, la precisión es del 9–12 %, y segmentar por control da ≤ 0,435.
+
+### 4.6 Equipo por color de camiseta (`enrich/jersey_team.py`, `--control`)
+
+Pone a prueba si el problema es la asignación de equipo en los duelos.
+
+- **Entrenamiento**: LightGBM sobre el histograma HSV del torso sin el césped, con las cajas en las que
+  el ATD es claro (69 %).
+- **Evaluación**: se entrena con la 1ª parte y se evalúa con la 2ª.
+
+| cajas | coincide con el ATD |
+|---|---|
+| 2ª parte, claras (acierto real) | **98,8 %** |
+| 2ª parte, duelos | 93,5 % |
+| 1ª parte, duelos | 89,6 % |
+
+- Corrige el equipo del ATD en el 6–10 % de las cajas en duelo.
+- Pero el control en las cortas apenas cambia: 46 / 56 / 62 % frente a 46 / 52 / 58 %.
+- Segmentar por control llega a 0,468, y como variable `--control` saca 0,502.
+- **La asignación de equipo explica poco. Manda la convención del GT.**
+
+### 4.7 Afinar el detector de balón con este partido (`enrich/finetune_ball.py`)
+
+- **Etiquetas**: salen del ATD, sin mano humana. Se usan los frames en los que el candidato del detector
+  coincide con el balón del ATD (85 %), o en los que el balón va lento por el suelo (15 %).
+- **Entrenamiento**: 8 000 frames; los últimos 20 min de la 2ª parte se reservan para evaluar.
+
+| | top-1 < 2 m | top-5 < 2 m | relleno simulado: acierto < 2 m del total |
+|---|---|---|---|
+| original | 52,2 % | 61,8 % | **54,6 %** |
+| afinado | **57,8 %** | 59,2 % | 53,7 % |
+
+El modelo afinado pone el balón primero más a menudo, pero propone menos candidatos, y el relleno
+empata. **Se mantiene el detector original.** Detalle en `enrich/README.md`.
+
+### 4.8 Posesiones cortas como segmentos (`analysis/short_spell_proposals.py`)
+
+- **Propuestas**: tramos en los que el equipo sin posesión según el pre-etiquetador está más cerca del
+  balón.
+- **Puntuación**: se describen con las medidas de §3.2 y se puntúan con LightGBM, que no ve el bloque
+  que puntúa.
+
+| unión de huecos / mínimo | cortas perdidas cubiertas | propuestas que aciertan | AUC | spellF1 anidado |
 |---|---|---|---|---|
 | 5 f / 10 f | 31 % de 54 | 5 % | 0,77 | 0,509 |
 | 15 f / 10 f | 35 % | 6 % | 0,82 | 0,507 |
 | 30 f / 5 f | 30 % | 5 % | 0,81 | 0,492 |
 | 50 f / 5 f | 28 % | 6 % | 0,84 | 0,500 |
 
-El pre-etiquetador solo saca 0,510. Las propuestas solo encajan con un tercio de las posesiones que
-faltan, y como solo el 5 % de las propuestas son aciertos, ni un AUC de 0,8 da la precisión necesaria.
-El problema de fondo es **encontrar los límites**: la señal se ve en la posesión entera, pero
-proponerla exige saber ya dónde empieza y dónde acaba.
+Las propuestas solo encajan con un tercio de las posesiones que faltan, y solo el 5 % de ellas
+acierta. **Para ver la señal hay que conocer ya los límites.**
 
-## 19. Smart tagging y broadcast como variables
+### 4.9 Smart tagging (`possession/smart_tagging.py`, por defecto)
 
-```bash
-docker compose run --rm dev python analysis/smart_tagging_vs_labels.py
-docker compose run --rm dev python -m possession.broadcast              # alineación, ~4 min
-docker compose run --rm dev python -m possession.prelabel --tagging     # y --broadcast
-```
-
-### Smart tagging (`possession/smart_tagging.py`)
-
-Ya viene en el tiempo del vídeo táctico. Contra los 55 min etiquetados:
+Viene ya en el tiempo del vídeo táctico (`analysis/smart_tagging_vs_labels.py`):
 
 | | resultado |
 |---|---|
-| equipo implicado por el código (ofensivo: el etiquetado; defensivo: el rival) | BUILD UP 99 %, PROGRESSION 85 %, transiciones 71 %, SET PIECES 68 %, en el área / último tercio 56–67 % |
-| reinicio real (D → H/A) tras el inicio de un balón parado | córner 6,0 s, saque de puerta 4,9 s, banda 6,2 s, falta 12,2 s (mediana) |
-| equipo que reinicia = equipo etiquetado del balón parado | 100 % (12 de 12; los saques de banda no tienen equipo) |
+| equipo implicado por el código | BUILD UP 99 %, PROGRESSION 85 %, transiciones 71 %, SET PIECES 68 %, en el área / último tercio 56–67 % |
+| reinicio real tras el inicio de un balón parado | córner 6,0 s, saque de puerta 4,9 s, banda 6,2 s, falta 12,2 s (mediana) |
+| equipo que reinicia = equipo del balón parado | 100 % (12 de 12; los saques de banda no tienen equipo) |
 | GOALS | 92–95 % de sus frames son D |
 
-Variables:
-- el equipo que implica cada código, una columna por código;
-- segundos desde y hasta el inicio de un balón parado, su tipo y su equipo;
-- segundos desde y hasta un gol.
+Son 18 variables: el equipo que implica cada código, los tiempos desde y hasta el balón parado (con
+su tipo y su equipo) y los tiempos desde y hasta un gol. Ver §4.13 para el resultado.
 
-### Broadcast (`possession/broadcast.py`)
+### 4.10 Broadcast alineado con el táctico (`possession/broadcast.py`, `--broadcast`)
 
-**Alineación.** Las dos grabaciones van en tiempo real, así que fuera de las repeticiones un frame
-`j` del broadcast es el frame `j + c` del táctico. Los dos ATD no comparten identidades (51 slots
-frente a 46), así que se empareja por geometría: para cada jugador del broadcast, la distancia al
-jugador más cercano del mismo equipo en el táctico, más la del balón cuando los dos lo tienen. 600
-frames del broadcast se buscan en todo el táctico, y los desfases que se repiten son los del directo:
+**Alineación.** Las dos grabaciones van en tiempo real, así que fuera de las repeticiones el frame
+`j` del broadcast es el `j + c` del táctico. Sin identidades comunes (51 slots frente a 46), se
+empareja por geometría: cada jugador del broadcast contra el más cercano de su equipo en el táctico,
+más el balón cuando los dos lo tienen.
 
 - **+4 013 f (+160,5 s)** en la 1ª parte y **+26 920 f (+1 076,8 s)** en la 2ª (el broadcast se salta
-  el descanso);
-- el 74 % de las muestras encaja a menos de 2 m.
+  el descanso).
+- El 74 % de las muestras encaja a menos de 2 m. La alineación tarda ~4 min.
 
-Estado del broadcast en cada frame etiquetado del táctico:
-
-| estado | frames | balón muerto |
+| estado del broadcast en cada frame etiquetado | frames | balón muerto |
 |---|---|---|
-| directo (coste < 2 m) | 56,8 % | 24,3 % |
-| campo visible pero no encaja (repetición o mal emparejado) | 20,9 % | 22,8 % |
+| directo | 56,8 % | 24,3 % |
+| campo visible pero no encaja | 20,9 % | 22,8 % |
 | **plano cerrado o sin campo** | 22,2 % | **85,6 %** |
-| todos | | 37,6 % |
 
-Un plano cerrado en el broadcast es una señal muy fuerte de balón muerto. Los frames "no encaja" se
-parecen al directo, así que casi todos son directo mal emparejado y no repeticiones. El balón del
-broadcast cubre solo el 8 % de los huecos del táctico (a 0,58 m de mediana cuando están los dos),
-porque Roboflow ya los rellenaba.
+- Un plano cerrado es una señal fuerte de balón muerto.
+- "No encaja" se comporta como directo: casi todo es directo mal emparejado, no repeticiones.
+- Variables: estado, coste del emparejamiento, si hay balón en el broadcast, proporción de frames que
+  no son directo a 2, 5 y 10 s, y la duración del tramo que no es directo.
 
-Variables:
-- el estado;
-- el coste del emparejamiento;
-- si el broadcast tiene balón;
-- la proporción de frames que no son directo en ventanas de 2, 5 y 10 s;
-- la duración del tramo que no es directo.
+### 4.11 Modelo del broadcast y juez (`possession/stack.py`)
 
-### Resultado (validación dejando un bloque fuera, 11 bloques)
-
-| variante | spellF1 medio | macroF1 medio | correcciones |
-|---|---|---|---|
-| pre-etiquetador | 0,510 | 0,803 | 244 |
-| `--tagging` | **0,521** | **0,816** | 235 |
-| `--broadcast` | **0,521** | 0,813 | **229** |
-| `--broadcast --tagging` | 0,512 | 0,810 | 236 |
-
-Cada fuente da una mejora pequeña y del mismo signo en las tres medidas, pero juntas no se suman, y
-todas las diferencias caen dentro del ruido entre bloques. Quedan como opciones y no se usan por
-defecto. El repo público no incluye la alineación, que es un dato derivado: `cache/`.
-
-## 20. Cinco semillas, modelo del broadcast y juez
-
-```bash
-for seed in 0 1 2 3 4; do
-  docker compose run --rm dev python -m possession.prelabel --seed $seed            # y --tagging, --broadcast
-done
-docker compose run --rm dev python -m possession.stack --seed 0
-```
-
-### ¿Son reales las mejoras de la sección 19?
-
-Validación dejando un bloque fuera, 11 bloques, con 5 semillas de LightGBM (bagging y muestreo de
-variables):
-
-| variante | spellF1 (media de 5 semillas) | rango entre semillas | macroF1 | correcciones |
-|---|---|---|---|---|
-| pre-etiquetador | 0,512 | 0,508–0,515 | 0,803 | 241 |
-| `--tagging` | 0,514 | 0,497–0,525 | **0,816** | 241 |
-| `--broadcast` | 0,512 | 0,494–0,524 | 0,809 | **231** |
-| `--broadcast --tagging` | 0,515 | 0,509–0,519 | 0,810 | 235 |
-
-- **En spellF1 no hay mejora**: +0,000 a +0,003, por debajo de la variación entre semillas (0,004–0,012).
-  El +0,011 de la sección 19 era la semilla 0.
-- **En macroF1 sí**, y en todas las semillas: el tagging +0,013 y el broadcast +0,006. Ayudan con el
-  balón muerto y el equipo frame a frame, no con la estructura de las posesiones.
-- El broadcast ahorra ~10 correcciones en todas las variantes que lo usan.
-
-### Modelo del broadcast y juez (`possession/stack.py`)
-
-- **Modelo del broadcast**: el mismo par de LightGBM, pero solo con lo que ve el broadcast en directo
-  (28 columnas): distancias del balón de su ATD a cada equipo, si ve el balón, cuántos jugadores ve,
-  su estado y ventanas de contexto. NaN cuando no está en directo.
-- **Juez**: otro par de LightGBM, simple (8 hojas, 200 muestras mínimas por hoja). Recibe las
-  probabilidades de los dos modelos, sus medias a 1 y 3 s, sus diferencias, el estado del broadcast,
-  el coste del emparejamiento y cuánto se disputa el balón en cada vista.
-- **Validación**: para cada bloque `k`, los dos modelos base se entrenan sin él. El juez se entrena
-  con las probabilidades fuera de muestra de los otros bloques, y se aplica con las del pliegue `k`.
-  Hay un sesgo optimista pequeño: los modelos base que dieron esas probabilidades sí vieron `k`.
+- **Modelo del broadcast**: el mismo par de LightGBM con lo que ve el broadcast en directo (28
+  columnas).
+- **Juez**: un LightGBM simple (8 hojas) sobre las probabilidades de los dos modelos, sus medias a 1 y
+  3 s, el estado del broadcast, el coste del emparejamiento y la disputa del balón en cada vista.
+- **Validación**: el juez se entrena con las probabilidades fuera de muestra de los otros bloques. Hay
+  un sesgo optimista pequeño: los modelos base que las dieron sí vieron el bloque evaluado.
 
 | variante (semilla 0) | spellF1 | macroF1 | posesiones (verdad 158) |
 |---|---|---|---|
@@ -598,54 +347,69 @@ variables):
 | media de los dos | 0,499 | 0,803 | 107 |
 | juez | 0,511 | 0,806 | 102 |
 
-Un primer juez, con los parámetros del pre-etiquetador (31 hojas), sacó 0,474 porque sobreajustaba.
-El juez simple empata con el táctico: gana en 6 bloques y pierde en 5. **El ángulo del broadcast no
-aporta información sobre los cambios de posesión que el táctico no tenga.** Por sí solo es débil,
-porque solo ve parte del campo, con planos cerrados y un tercio de frames sin homografía.
+Un juez de 31 hojas sobreajustaba y sacaba 0,474. El simple empata: el ángulo del broadcast no aporta
+información nueva sobre los cambios.
 
-## 21. El balón visto desde el broadcast (`enrich/detect_ball_broadcast.py`)
+### 4.12 Balón detectado en el broadcast (`enrich/detect_ball_broadcast.py`, `--ball-broadcast`)
+
+El balón se ve más grande en el broadcast. Calibración en 2 000 frames que el broadcast muestra en
+directo:
+
+| detector | top-1 < 2 m | top-5 < 2 m | top-1 < 5 m |
+|---|---|---|---|
+| vídeo táctico, original | 58,2 % | **71,5 %** | 69,1 % |
+| **broadcast, original `full1280`** | **63,7 %** | 67,0 % | **77,0 %** |
+| broadcast, afinado `full1280` | 62,8 % | 63,2 % | 74,9 % |
+
+- El broadcast muestra en directo el 30 % de los huecos (19 365 frames).
+- De los 9 967 que el táctico no rellenaba, solo el 29 % tiene un candidato fiable dentro del campo.
+- `merge --broadcast` sube el relleno del 48,7 % al 49,8 %.
+
+### 4.13 Cinco semillas
+
+Para separar mejora de ruido, las variantes que dependen de pocas décimas se repitieron con 5
+semillas de LightGBM:
+
+| variante | spellF1 | rango entre semillas | macroF1 | correcciones |
+|---|---|---|---|---|
+| sin tagging | 0,512 | 0,508–0,515 | 0,803 | 241 |
+| **con tagging (por defecto)** | 0,514 | 0,497–0,525 | **0,816** | 241 |
+| sin tagging + `--broadcast` | 0,512 | 0,494–0,524 | 0,809 | **231** |
+| `--broadcast` + tagging | 0,515 | 0,509–0,519 | 0,810 | 235 |
+| tagging + `--ball-broadcast` | 0,518 | 0,510–0,537 | 0,817 | 242 |
+
+- **En spellF1 ninguna fuente mejora** fuera de la variación entre semillas (0,004–0,012). Con una sola
+  semilla, el tagging y el broadcast parecían dar +0,011.
+- **En macroF1 sí**, y en todas las semillas: el tagging +0,013. Por eso va por defecto.
+
+## 5. Opciones, artefactos y reproducibilidad
+
+| opción de `prelabel` | por defecto | necesita | efecto |
+|---|---|---|---|
+| desfase del anotador | sí (`--no-shift`) | — | §1 |
+| smart tagging | sí (`--no-tagging`) | — | macroF1 +0,013 |
+| `--broadcast` | no | `possession.broadcast` | neutro |
+| `--ball-broadcast` | no | `detect_ball_broadcast gaps` + `merge --broadcast` | neutro |
+| `--touches` | no | `detect_ball --mode visible` | neutro |
+| `--control` | no | `detect_players` + `jersey_team` (solo bloques etiquetados) | neutro |
+| `--seed` | 0 | — | variación entre semillas ±0,01 |
+
+**Artefacto fijo (regla 3, opción b).** La inferencia en GPU no se regenera en la entrega. Las
+detecciones de balón y el ATD enriquecido que usa el modelo por defecto se verifican con:
 
 ```bash
-docker compose run --rm gpu python -m enrich.detect_ball_broadcast calibrate
-docker compose run --rm gpu python -m enrich.detect_ball_broadcast gaps --tiling full1280   # 19 365 frames
-docker compose run --rm dev python -m enrich.merge --broadcast        # -> *_atd_enriched_bc.npz
-docker compose run --rm dev python -m possession.prelabel --ball-broadcast
+docker compose run --rm dev sha256sum -c enrich/artefacts.sha256
 ```
 
-La idea: el broadcast enseña menos campo y más de cerca, así que el balón se ve más grande. El
-detector se pasa por el frame del broadcast que muestra en directo cada frame del táctico (sección
-19), y sus candidatos se proyectan al campo con la homografía **del broadcast**.
+Con el artefacto verificado, `prelabel` es determinista: con la semilla 0 y el tagging, dos
+ejecuciones dan las mismas 235 correcciones. Los archivos de las opciones experimentales (detecciones
+de jugadores y del broadcast, alineación, `*_atd_enriched_bc.npz`) no están en el manifiesto, porque
+el modelo por defecto no los usa.
 
-**Calibración** (2 000 frames con balón del ATD táctico que el broadcast muestra en directo):
+## 6. Siguientes pasos
 
-| detector | detecta algo | top-1 < 2 m | top-5 < 2 m | top-1 < 5 m |
-|---|---|---|---|---|
-| vídeo táctico, original (`tiles640`) | 100 % | 58,2 % | **71,5 %** | 69,1 % |
-| broadcast, original `tiles640` | 98,4 % | 57,1 % | 66,5 % | 68,8 % |
-| **broadcast, original `full1280`** | 95,8 % | **63,7 %** | 67,0 % | **77,0 %** |
-| broadcast, afinado `full1280` | 83,9 % | 62,8 % | 63,2 % | 74,9 % |
-
-En el broadcast el candidato principal acierta más, sobre todo procesando la imagen entera a 1280
-px, porque el balón es más grande. El modelo afinado con el táctico no aporta nada aquí.
-
-**Cobertura.** Hay 19 365 frames calificados sin balón del ATD táctico que el broadcast muestra en
-directo (el 30 % de los huecos). De los 9 967 que el detector táctico no rellenaba, solo el 29 %
-tiene en el broadcast un candidato con confianza ≥ 0,3 dentro del campo. En el 46 %, todos sus
-candidatos caen fuera del campo. Son huecos difíciles desde los dos ángulos: balón fuera, en el aire
-o muerto.
-
-**`merge --broadcast`** junta los candidatos de los dos vídeos en cada hueco, y el rastreador elige el
-que encaja con la trayectoria (`ball_source = 4` si viene del broadcast). Se rellena el **49,8 %** de
-los frames sin balón, frente al 48,7 % sin broadcast. El broadcast aporta el 4,7 %, pero la mayoría
-sustituye a candidatos tácticos.
-
-**Resultado** (validación dejando un bloque fuera, 11 bloques, 5 semillas, con el tagging ya por
-defecto):
-
-| | spellF1 | macroF1 | correcciones |
-|---|---|---|---|
-| pre-etiquetador | 0,514 | 0,816 | 241 |
-| `--ball-broadcast` | 0,518 | 0,817 | 242 |
-
-Mejora en 4 bloques y empeora en 2, con una diferencia media de +0,003: es neutro. Queda como
-opción, y el artefacto fijo (`enrich/artefacts.sha256`) no cambia.
+1. **La entrega** (06, §5): un CSV del partido completo con *cross-fitting* (regla 1), que se
+   regenere bit a bit, y el repo listo para hacerlo público sin datos ni etiquetas.
+2. Opcional: más bloques de la 2ª parte para validar mejor el cambio de lado.
+3. Abierto: un modelo secuencial que aprenda los límites de las posesiones directamente (por ejemplo,
+   sobre ventanas largas). Es arriesgado con 55 min de etiquetas.

@@ -145,9 +145,15 @@ starter/
   utils.py                  dibujo del campo
   01/02/03_*.ipynb          notebooks guiados
 data/                       datos del partido (gitignored)
-analysis/                   [nuevo] scripts del EDA de este análisis (caché gitignored)
+analysis/                   [nuevo] EDA y diagnósticos, solo agregados (caché gitignored)
 docs/                       [nuevo] estos documentos y figuras
+possession/                 [nuevo] el modelo: lectura, variables, v0/v1, pre-etiquetador, HMM
+enrich/                     [nuevo] visión con GPU (Roboflow) y artefacto fijo de detecciones
+labeler/                    [nuevo] etiquetador web, desfase de anotadores, visualizador
+docker/                     [nuevo] imágenes dev y GPU
 ```
+
+Cómo encajan estas piezas: [06 · Flujo del modelo](06_flujo_del_modelo.md).
 
 Baselines del repo (los cuatro usan el mismo algoritmo y solo cambia la ventana del voto):
 

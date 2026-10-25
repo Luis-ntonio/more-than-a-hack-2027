@@ -135,5 +135,5 @@ Pasa el detector por el vídeo del broadcast en los frames que muestran en direc
 táctico (alineación: `possession/broadcast.py`) y proyecta los candidatos con la homografía del
 broadcast. El candidato principal acierta más que en el vídeo táctico (63,7 % frente a 58,2 % a
 menos de 2 m, con `full1280`). Aun así, `merge --broadcast` solo sube el relleno del 48,7 % al
-49,8 %, y el modelo de posesión no mejora (docs/05, sección 21). Escribe archivos aparte
+49,8 %, y el modelo de posesión no mejora (docs/05, §4.12). Escribe archivos aparte
 (`*_ball_detections_broadcast.npz`, `*_atd_enriched_bc.npz`) que no forman parte del artefacto fijo.

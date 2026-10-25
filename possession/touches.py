@@ -4,7 +4,7 @@ A touch is a frame where the ball turns by more than ANGLE_DEG or changes speed 
 DSPEED_MS between the WINDOW frames before and after it, with a player within RADIUS_M; its team
 is the nearest player's. A touch is confirmed when the next touch within CONFIRM_S is by the same
 team: control rather than a deflection. analysis/touch_signal.py measures how these line up with
-possession changes (docs/05, section 11).
+possession changes (docs/05 §4.3).
 
 The detector's ball needs enrich.detect_ball --mode missing and --mode visible plus enrich.merge.
 Those detections are a fixed artefact of the submission (GPU inference is not regenerated): this
