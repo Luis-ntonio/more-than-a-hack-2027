@@ -437,3 +437,47 @@ identificado, en las posesiones de menos de 4 s quien toca el balón es el equip
 mitad de las veces. La causa principal es la convención del GT para los balones divididos
 (explicación 1): esas posesiones no se ven como control del balón. `--control` queda como opción
 experimental: solo hay detecciones de jugadores en los bloques etiquetados.
+
+## 18. Qué es una posesión corta en el GT (`analysis/short_spell_profile.py`)
+
+```bash
+docker compose run --rm dev python analysis/short_spell_profile.py
+docker compose run --rm dev python analysis/short_spell_proposals.py --merge-f 15 --min-f 10
+```
+
+Se mide el balón **sobre los límites reales** de cada posesión que sigue a una del otro equipo, desde
+el punto de vista del equipo que la gana. Se compara con ventanas de la misma duración dentro de
+posesiones largas (más de 8 s, a más de 2 s de los extremos), tomando como "nuevo" al equipo sin el
+balón. La dirección de ataque sale de la posición mediana de cada portero en cada parte.
+
+| medida (2–4 s, n = 23) | corta | control | AUC |
+|---|---|---|---|
+| distancia mínima del equipo nuevo al balón | 0,29 m | 2,57 m | 0,12 (0,88 invertido) |
+| % de frames en que el nuevo está más cerca | 64 % | 16 % | 0,84 |
+| avance del balón hacia la portería que ataca | +11,6 m | −3,1 m | 0,82 |
+| dónde empieza (desde su propia portería) | 34 m | 63 m | 0,25 (0,75 invertido) |
+
+Las posesiones de 4–8 s son parecidas (avance +19,6 m, AUC de cercanía 0,89). Las de 0–2 s, menos
+(AUC 0,61–0,79). Después de una posesión corta, el balón vuelve al equipo anterior el 59–74 % de las
+veces, y si no, es balón muerto.
+
+**Qué es una posesión corta:** el equipo que defiende recupera el balón en su propia mitad, lo saca
+10–20 m y lo pierde enseguida. La señal existe, pero solo es clara cuando se conocen los límites de
+la posesión. Frame a frame es débil: el equipo nuevo está más cerca solo el ~60 % del tiempo, y el
+HMM la suaviza.
+
+**Detectarlas como segmentos no funciona** (`analysis/short_spell_proposals.py`). Se proponen tramos
+en los que el equipo sin posesión según el pre-etiquetador está más cerca del balón, se describen con
+las medidas de arriba y se puntúan con LightGBM, entrenado dejando fuera el bloque que se puntúa.
+
+| unión de huecos / mínimo | cortas perdidas cubiertas por una propuesta | propuestas que aciertan | AUC | spellF1 anidado |
+|---|---|---|---|---|
+| 5 f / 10 f | 31 % de 54 | 5 % | 0,77 | 0,509 |
+| 15 f / 10 f | 35 % | 6 % | 0,82 | 0,507 |
+| 30 f / 5 f | 30 % | 5 % | 0,81 | 0,492 |
+| 50 f / 5 f | 28 % | 6 % | 0,84 | 0,500 |
+
+El pre-etiquetador solo saca 0,510. Las propuestas solo encajan con un tercio de las posesiones que
+faltan, y como solo el 5 % de las propuestas son aciertos, ni un AUC de 0,8 da la precisión necesaria.
+El problema de fondo es **encontrar los límites**: la señal se ve en la posesión entera, pero
+proponerla exige saber ya dónde empieza y dónde acaba.
