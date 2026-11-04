@@ -74,3 +74,6 @@ labels/
 
 # model weights (downloaded by enrich/download_models.sh)
 models/
+
+# external training data (IDSSE, SkillCorner...): downloaded, never committed
+external_data/
