@@ -1,6 +1,7 @@
 """Train the possession models on external data and validate them on held-out external matches.
 
-    docker compose run --rm dev python -m external.train
+    docker compose run --rm dev python -m external.train            # 5 matches, score on the other 2
+    docker compose run --rm dev python -m external.train --final    # all 7, saved for external.predict
 
 Two LightGBM models on the features of external/features.py -- dead / alive, then home / away on
 alive frames -- trained on degraded IDSSE matches, both ways round (teams swapped), then a 3-state
@@ -23,6 +24,7 @@ from possession.decode import viterbi
 sys.path.insert(0, os.path.join(idsse.ROOT, "evaluation"))
 import possession_metrics as pm  # noqa: E402
 
+MODEL_DIR = os.path.join(idsse.ROOT, "external_data", "models")
 VAL_MATCHES = ("J03WOY", "J03WR9")
 STRIDE = 5
 LGB_PARAMS = {"objective": "binary", "learning_rate": 0.05, "num_leaves": 63, "min_child_samples": 100,
@@ -52,12 +54,12 @@ def transition_costs(all_labels):
     return np.log(counts / counts.sum(axis=1, keepdims=True))
 
 
-def decode(p_dead, p_home, half, log_transition, weight=1.0):
-    """Viterbi per half. weight < 1 discounts emissions: neighbouring frames are not independent."""
+def decode(p_dead, p_home, half, log_transition):
+    """Viterbi per half, on the two models' probabilities."""
     p_dead = np.clip(p_dead, 1e-6, 1 - 1e-6)
     p_home = np.clip(p_home, 1e-6, 1 - 1e-6)
-    emission = weight * np.column_stack([np.log1p(-p_dead) + np.log(p_home),
-                                         np.log1p(-p_dead) + np.log1p(-p_home), np.log(p_dead)])
+    emission = np.column_stack([np.log1p(-p_dead) + np.log(p_home),
+                                np.log1p(-p_dead) + np.log1p(-p_home), np.log(p_dead)])
     out = np.empty(len(half), dtype="<U1")
     for h in np.unique(half):
         rows = half == h
@@ -78,18 +80,11 @@ def score(truth, pred):
     return r["spell_f1_mean"], r["macro_f1"], spells
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--seed", type=int, default=0)
-    args = parser.parse_args()
-    rng = np.random.default_rng(args.seed)
-    LGB_PARAMS["seed"] = args.seed
-
+def fit(matches, rng):
+    """(dead model, team model, log transition matrix, feature names) from these IDSSE matches."""
     rows_X, y_dead, y_home, train_labels = [], [], [], []
     names = None
-    for match in idsse.MATCHES:
-        if match in VAL_MATCHES:
-            continue
+    for match in matches:
         d = idsse.load(match)
         labels = idsse.to_labels(d)
         train_labels.append(labels)
@@ -106,10 +101,23 @@ def main():
     dead = lgb.train(LGB_PARAMS, lgb.Dataset(X, y_dead.astype(int)), N_ROUNDS)
     alive = ~y_dead
     team = lgb.train(LGB_PARAMS, lgb.Dataset(X[alive], y_home[alive].astype(int)), N_ROUNDS)
-    log_t = transition_costs(train_labels)
-    print("transition per frame: stay H {:.4f}, H>A {:.4f}, H>D {:.4f}, D>H {:.4f}".format(
-        *np.exp([log_t[0, 0], log_t[0, 1], log_t[0, 2], log_t[2, 0]])))
+    return dead, team, transition_costs(train_labels), names
 
+
+def save(dead, team, log_t):
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    dead.save_model(os.path.join(MODEL_DIR, "dead.txt"))
+    team.save_model(os.path.join(MODEL_DIR, "team.txt"))
+    np.save(os.path.join(MODEL_DIR, "log_transition.npy"), log_t)
+
+
+def load():
+    return (lgb.Booster(model_file=os.path.join(MODEL_DIR, "dead.txt")),
+            lgb.Booster(model_file=os.path.join(MODEL_DIR, "team.txt")),
+            np.load(os.path.join(MODEL_DIR, "log_transition.npy")))
+
+
+def validate(dead, team, log_t, names):
     print("\n{:<9} {:<9} {:<24} {:>8} {:>8} {:>6} {:>6}".format(
         "match", "tracking", "model", "spellF1", "macroF1", "poss", "truth"))
     results = {}
@@ -125,8 +133,7 @@ def main():
             frame = np.where(pd_ >= 0.5, "D", np.where(ph >= 0.5, "H", "A"))
             nearest = np.where(pd_ >= 0.5, "D", nearest_team(Xv, names))
             for label, pred in (("nearest + model's D", nearest), ("frame by frame", frame),
-                                ("HMM", decode(pd_, ph, d["half"], log_t)),
-                                ("HMM, emissions x0.2", decode(pd_, ph, d["half"], log_t, 0.2))):
+                                ("HMM", decode(pd_, ph, d["half"], log_t))):
                 s = score(truth, pred)
                 results.setdefault((name, label), []).append(s)
                 print("{:<9} {:<9} {:<24} {:>8.3f} {:>8.3f} {:>6} {:>6}".format(
@@ -135,6 +142,24 @@ def main():
     for (name, label), rows in results.items():
         r = np.mean(rows, axis=0)
         print("  {:<9} {:<24} spellF1 {:.3f}  macroF1 {:.3f}  poss {:.0f}".format(name, label, *r))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--final", action="store_true", help="train on all matches and save the models")
+    args = parser.parse_args()
+    LGB_PARAMS["seed"] = args.seed
+    rng = np.random.default_rng(args.seed)
+    if args.final:
+        dead, team, log_t, _ = fit(idsse.MATCHES, rng)
+        save(dead, team, log_t)
+        print("-> " + os.path.relpath(MODEL_DIR, idsse.ROOT))
+        return
+    dead, team, log_t, names = fit([m for m in idsse.MATCHES if m not in VAL_MATCHES], rng)
+    print("transition per frame: stay H {:.4f}, H>A {:.4f}, H>D {:.4f}, D>H {:.4f}".format(
+        *np.exp([log_t[0, 0], log_t[0, 1], log_t[0, 2], log_t[2, 0]])))
+    validate(dead, team, log_t, names)
 
 
 if __name__ == "__main__":
