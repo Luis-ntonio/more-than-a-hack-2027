@@ -110,12 +110,38 @@ El azar (posición del balón 5 s después) da 0,1 % en top1 < 2 m.
   y 12,3 % en 0,70, conservando el 19,9 % de los frames. Sirve para ordenar umbrales. Los valores
   absolutos no se trasladan: SoccerTrack es mucho más difícil que la cámara táctica.
 
+## Validación en SkillCorner
+
+```bash
+docker compose run --rm dev python -m external.skillcorner download   # 20 partidos, ~1,8 GB
+docker compose run --rm dev python -m external.skillcorner parse
+docker compose run --rm dev python -m external.validate_skillcorner
+```
+
+Tracking real de broadcast a 10 fps de la A-League 2024/25, en un commit fijado. El README anuncia 10
+partidos, pero `matches.json` lista 20. Los modelos finales de IDSSE se aplican sin cambios, con las
+posiciones interpoladas a 25 fps. La verdad es `D` fuera de una fase de juego y, dentro, el último
+equipo en `possession.group`.
+
+| modelo (`detected`, 20 partidos) | spellF1 | macroF1 | posesiones | reales |
+|---|---|---|---|---|
+| jugador más cercano | 0,063 | 0,738 | 2 137 | 318 |
+| LightGBM frame a frame | 0,156 | 0,796 | 1 199 | 318 |
+| **LightGBM + HMM** | **0,372** | 0,800 | 330 | 318 |
+
+- Mide acuerdo entre dos definiciones de posesión, no acierto en el reto, y la cámara no es la táctica.
+- Con el relleno de SkillCorner (`extrapolated`), el HMM da 0,361 / 0,793.
+- Muerto o vivo coincide en el 89,8 % de los frames; el equipo, en el 74,9 % de los vivos con tracking.
+- El 25,6 % de los frames no tiene tracking y su verdad es `D` en el 96,5 %, quizá por construcción.
+  Sin ellos, el HMM da 0,385 / 0,783.
+- La licencia MIT habla de software y no menciona los datos: aclararlo antes de entrenar con ellos.
+
 ## Pendiente
 
 1. **Balón enriquecido:** `external/predict.py` usa el ATD crudo. Las detecciones crudas con los pesos
    originales son válidas y no hay que repetirlas. Falta volver a generar `merge` con umbrales físicos
    o externos, porque `conf_min` y `margin_m` salieron de este partido.
-2. **SkillCorner:** validar con tracking de broadcast real.
+2. **SkillCorner:** probar si añadirlo al entrenamiento mejora, con partidos retenidos.
 3. **Repo público:** retirar lo contaminado (`labeler/` como validación, `possession/prelabel.py`,
    `enrich/finetune_ball.py`, `enrich/jersey_team.py`, `V1_PARAMS`) y decidir qué pasa con el historial.
 4. **Consulta a la organización:** si las estadísticas agregadas del partido que ve un asistente de IA
