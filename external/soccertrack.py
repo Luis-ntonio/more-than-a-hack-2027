@@ -7,6 +7,7 @@ external_data/soccertrack/ (gitignored). The Hugging Face token is read from ext
 and is never printed.
 """
 import argparse
+import collections
 import json
 import os
 import shutil
@@ -22,6 +23,7 @@ REVISION = "325bd4c57ee8e135ab652f3921d274526ada496b"
 REPO = "datasets/atomscott/soccertrack-v2"
 API = "https://huggingface.co/api/{}/tree/{}/".format(REPO, REVISION)
 FILE = "https://huggingface.co/{}/resolve/{}/".format(REPO, REVISION)
+MATCHES = ("117093", "118575", "118577", "128057")   # first halves: none of them is trained on
 
 
 def request(url):
@@ -70,11 +72,42 @@ def annotations(_):
         print(line)
 
 
+def small_files(_):
+    """Events and calibration of the matches in MATCHES, and what the calibration holds."""
+    for match in MATCHES:
+        fetch("bas/{0}/{0}_12_class_events.json".format(match))
+        for name in ("camera_intrinsics.npz", "homography.npy", "keypoints.json", "mapx.npy", "mapy.npy"):
+            fetch("raw/{0}/{0}_{1}".format(match, name))
+    match = MATCHES[0]
+    z = np.load(os.path.join(DATA_DIR, "raw", match, match + "_camera_intrinsics.npz"))
+    for key in z.files:
+        try:
+            print("intrinsics {}: shape {} dtype {}".format(key, z[key].shape, z[key].dtype))
+        except ValueError:   # an object array: loading it would mean unpickling a downloaded file
+            print("intrinsics {}: object array, skipped".format(key))
+    for name in ("homography", "mapx", "mapy"):
+        a = np.load(os.path.join(DATA_DIR, "raw", match, "{}_{}.npy".format(match, name)))
+        print("{}: shape {} dtype {}".format(name, a.shape, a.dtype))
+    with open(os.path.join(DATA_DIR, "bas", match, match + "_12_class_events.json")) as handle:
+        events = json.load(handle)
+    print("events top level:", list(events)[:8] if isinstance(events, dict) else type(events).__name__)
+    rows = next((v for v in events.values() if isinstance(v, list)), []) if isinstance(events, dict) else events
+    print("{} events, fields {}".format(len(rows), sorted(rows[0]) if rows else []))
+    print("labels:", collections.Counter(r.get("label") for r in rows).most_common(12))
+
+
+def videos(_):
+    for match in MATCHES:
+        remote = "videos/{0}/{0}_panorama_1st_half.mp4".format(match)
+        path = fetch(remote)
+        print("{}: {:.1f} GB".format(remote, os.path.getsize(path) / 1e9), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("step", choices=["annotations"])
+    parser.add_argument("step", choices=["annotations", "small", "videos"])
     args = parser.parse_args()
-    {"annotations": annotations}[args.step](args)
+    {"annotations": annotations, "small": small_files, "videos": videos}[args.step](args)
 
 
 if __name__ == "__main__":
