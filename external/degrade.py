@@ -21,6 +21,13 @@ BALL_NOISE_M = (0.1, 1.0)
 PLAYER_NOISE_M = (0.05, 0.5)
 PLAYER_LOST = (0.0, 0.25)          # share of the time a player is missing
 PLAYER_GAP_S = (1.0, 20.0)
+# Detector fill of the lost frames. SoccerTrack's panorama sits at the low end of FILL_SHARE; the
+# ranges stay wide because a tactical camera is easier and how much easier cannot be measured here.
+FILL_SHARE = (0.05, 0.6)           # share of the lost frames that get filled
+FILL_RUN_S = (0.2, 2.0)
+FILL_RIGHT = (0.6, 0.95)           # share of filled runs that follow the real ball
+FILL_NOISE_M = (0.3, 2.0)
+FILL_WRONG_M = (5.0, 25.0)         # a run on a head or a sock: this far from the ball
 
 
 def smooth_noise(rng, n, sigma, seconds=0.4):
@@ -45,24 +52,51 @@ def drop_gaps(rng, weights, share, median_s):
     return lost
 
 
-def degrade(view, ball_z, rng):
-    """A degraded copy of a view. ball_z is only used to decide when the ball gets lost."""
+def fill_lost(rng, truth, lost):
+    """(positions, filled): what a detector would put in some of the lost frames of one chunk."""
+    filled = np.zeros(len(lost), dtype=bool)
+    positions = np.full(truth.shape, np.nan)
+    if not lost.any():
+        return positions, filled
+    share = rng.uniform(*FILL_SHARE) * lost.mean()
+    picked = drop_gaps(rng, lost.astype(float), share, rng.uniform(*FILL_RUN_S)) & lost
+    right, noise = rng.uniform(*FILL_RIGHT), rng.uniform(*FILL_NOISE_M)
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], picked.astype(np.int8), [0]])))
+    for a, b in zip(edges[::2], edges[1::2]):
+        positions[a:b] = truth[a:b] + noise * rng.standard_normal((b - a, 2))
+        if rng.uniform() > right:
+            angle = rng.uniform(0, 2 * np.pi)
+            positions[a:b] += rng.uniform(*FILL_WRONG_M) * np.array([np.cos(angle), np.sin(angle)])
+        filled[a:b] = True
+    return positions, filled
+
+
+def degrade(view, ball_z, rng, fill=False):
+    """A degraded copy of a view. ball_z is only used to decide when the ball gets lost.
+
+    With fill, some lost frames get a detector-like ball, flagged in the view's "filled".
+    """
     players = view["players"].copy()
     ball = view["ball"].copy()
     n, slots = players.shape[:2]
     crowd = (np.linalg.norm(players - ball[:, None, :], axis=2) < CROWD_M).sum(axis=1)
     weights = 1.0 + CROWD_GAIN * (crowd >= 3) + AIR_GAIN * (ball_z > AIR_M)
     chunk = CHUNK_S * FPS
+    filled = np.zeros(n, dtype=bool)
     for a in range(0, n, chunk):
         b = min(a + chunk, n)
         m = b - a
         lost = drop_gaps(rng, weights[a:b], rng.uniform(*LOST_SHARE), rng.uniform(*GAP_MEDIAN_S))
+        truth = ball[a:b].copy()
         ball[a:b] += smooth_noise(rng, m, rng.uniform(*BALL_NOISE_M))
         ball[a:b][lost] = np.nan
+        if fill:
+            positions, filled[a:b] = fill_lost(rng, truth, lost)
+            ball[a:b][filled[a:b]] = positions[filled[a:b]]
         sigma = rng.uniform(*PLAYER_NOISE_M)
         share = rng.uniform(*PLAYER_LOST)
         for s in range(slots):
             players[a:b, s] += smooth_noise(rng, m, sigma)
             gone = drop_gaps(rng, np.ones(m), share, rng.uniform(*PLAYER_GAP_S))
             players[a:b, s][gone] = np.nan
-    return dict(view, players=players, ball=ball)
+    return dict(view, players=players, ball=ball, filled=filled)

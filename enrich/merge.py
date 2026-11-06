@@ -25,12 +25,12 @@ from possession.io import FPS, PITCH, ROOT, graded_blocks, load_atd, load_homogr
 
 SOURCE_NONE, SOURCE_ATD, SOURCE_DETECTOR, SOURCE_INTERP, SOURCE_BROADCAST = 0, 1, 2, 3, 4
 PARAMS = {
-    "conf_min": 0.30,       # below this a candidate is ignored (set from calibrate's precision)
-    "conf_seed": 0.50,      # starting a track with nothing to anchor it needs more confidence
+    "conf_min": 0.50,       # below this a candidate is ignored (chosen on SoccerTrack: external.fill_eval)
+    "conf_seed": 0.50,      # starting a track with nothing to anchor it; no effect on SoccerTrack
     "max_speed_ms": 40.0,   # a struck ball tops out around 30-35 m/s
     "slack_m": 2.0,         # homography + detection error on top of the speed bound
-    "margin_m": 0.0,        # candidates further than this outside the pitch are discarded: a ball
-                            # out of the pitch is out of play, and spare balls sit off it
+    "margin_m": 2.0,        # candidates further than this outside the pitch are discarded: a ball
+                            # out of the pitch is out of play. Same tolerance as slack_m
     "anchor_s": 1.0,        # an ATD position this recent anchors the start of a gap
     "min_run": 3,           # accepted runs shorter than this are dropped...
     "keep_conf": 0.70,      # ...unless every frame in them is at least this confident

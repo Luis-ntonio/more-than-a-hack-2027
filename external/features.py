@@ -3,6 +3,7 @@
 Everything works on a common view, in metres with the pitch centred on (0, 0):
   players (n, slots, 2), NaN when absent; team (slots,), 0 home, 1 away
   ball (n, 2), NaN when lost; half (n,); pitch (length, width)
+  filled (n,), optional: True where the ball came from a detector, not from the tracking
 No height, no camera, no tagging: a model trained on external data cannot see those. Features are
 written from the home team's point of view, and x runs towards the goal home attacks in that half,
 so swapping the teams (swap_teams) is a valid augmentation. Radii and windows are physical choices.
@@ -85,6 +86,7 @@ def compute(view):
 
     cols = {}
     cols["visible"] = visible.astype(float)
+    cols["filled"] = view.get("filled", np.zeros(len(ball), dtype=bool)).astype(float)
     cols["gap_since_s"], cols["gap_until_s"], cols["gap_len_s"] = run_info(~visible)
     cols["d_home"], cols["d_away"] = d[0], d[1]
     cols["d_diff"] = d[1] - d[0]

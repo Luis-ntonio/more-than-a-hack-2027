@@ -4,7 +4,8 @@
     docker compose run --rm dev python -m external.train --final    # all 7, saved for external.predict
 
 Two LightGBM models on the features of external/features.py -- dead / alive, then home / away on
-alive frames -- trained on degraded IDSSE matches, both ways round (teams swapped), then a 3-state
+alive frames -- trained on degraded IDSSE matches with a simulated detector fill of part of the lost
+ball (external.fill_experiment shows why), both ways round (teams swapped), then a 3-state
 HMM whose transition costs come from the training labels. Scored with the official metrics on
 held-out IDSSE matches, clean and degraded, next to a nearest-player baseline. Nothing here reads
 the provided match.
@@ -80,7 +81,7 @@ def score(truth, pred):
     return r["spell_f1_mean"], r["macro_f1"], spells
 
 
-def fit(matches, rng):
+def fit(matches, rng, fill=False):
     """(dead model, team model, log transition matrix, feature names) from these IDSSE matches."""
     rows_X, y_dead, y_home, train_labels = [], [], [], []
     names = None
@@ -88,7 +89,7 @@ def fit(matches, rng):
         d = idsse.load(match)
         labels = idsse.to_labels(d)
         train_labels.append(labels)
-        view = degrade(view_of(d), d["ball"][:, 2], rng)
+        view = degrade(view_of(d), d["ball"][:, 2], rng, fill=fill)
         for v, lab in ((view, labels), (swap_teams(view), swap_labels(labels))):
             X, names = compute(v)
             rows_X.append(X[::STRIDE])
@@ -152,11 +153,11 @@ def main():
     LGB_PARAMS["seed"] = args.seed
     rng = np.random.default_rng(args.seed)
     if args.final:
-        dead, team, log_t, _ = fit(idsse.MATCHES, rng)
+        dead, team, log_t, _ = fit(idsse.MATCHES, rng, fill=True)
         save(dead, team, log_t)
         print("-> " + os.path.relpath(MODEL_DIR, idsse.ROOT))
         return
-    dead, team, log_t, names = fit([m for m in idsse.MATCHES if m not in VAL_MATCHES], rng)
+    dead, team, log_t, names = fit([m for m in idsse.MATCHES if m not in VAL_MATCHES], rng, fill=True)
     print("transition per frame: stay H {:.4f}, H>A {:.4f}, H>D {:.4f}, D>H {:.4f}".format(
         *np.exp([log_t[0, 0], log_t[0, 1], log_t[0, 2], log_t[2, 0]])))
     validate(dead, team, log_t, names)

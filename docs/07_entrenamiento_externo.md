@@ -16,6 +16,7 @@ y en el paquete `external/`, que no lee etiquetas a mano, GT ni resultados anter
 docker compose run --rm dev python -m external.idsse download   # 7 partidos, ~2,6 GB
 docker compose run --rm dev python -m external.idsse parse
 docker compose run --rm dev python -m external.train            # 5 partidos, valida en 2
+docker compose run --rm dev python -m enrich.merge              # balón enriquecido
 docker compose run --rm dev python -m external.train --final    # 7 partidos
 docker compose run --rm dev python -m external.predict          # evaluation/results/external.csv
 docker compose run --rm dev python evaluation/validate_submission.py evaluation/results/external.csv
@@ -24,8 +25,8 @@ docker compose run --rm dev python evaluation/validate_submission.py evaluation/
 | pieza | qué hace |
 |---|---|
 | `external/idsse.py` | descarga IDSSE y lo convierte a arrays con `BallPossession` y `BallStatus` |
-| `external/features.py` | 148 variables que existen en las dos fuentes: distancias al balón, jugadores cerca, balón, toques, ventanas |
-| `external/degrade.py` | hace que el tracking óptico de IDSSE se parezca a un tracking automático |
+| `external/features.py` | 149 variables que existen en las dos fuentes: distancias al balón, jugadores cerca, balón, toques, ventanas |
+| `external/degrade.py` | hace que el tracking óptico de IDSSE se parezca a un tracking automático, con relleno simulado del detector |
 | `external/train.py` | dos LightGBM y un HMM con costes sacados de las etiquetas de IDSSE; valida en partidos retenidos |
 | `external/predict.py` | aplica el modelo al partido, que entra solo como dato |
 
@@ -136,11 +137,55 @@ equipo en `possession.group`.
   Sin ellos, el HMM da 0,385 / 0,783.
 - La licencia MIT habla de software y no menciona los datos: aclararlo antes de entrenar con ellos.
 
+## Balón enriquecido
+
+`enrich/merge.py` rellena los huecos del ATD con las detecciones guardadas, que salieron de los pesos
+originales con `tiles640` (hash de pesos y de artefacto comprobados). `conf_min` y `margin_m` venían del
+partido y ya no: se eligen fuera de él.
+
+```bash
+docker compose run --rm gpu python -m external.fill_eval detect
+docker compose run --rm dev python -m external.fill_eval sweep
+docker compose run --rm dev python -m external.fill_experiment
+```
+
+**Umbrales en SoccerTrack.** 240 ventanas de 1–4 s entre eventos anclados (11 026 frames): se oculta el
+balón tras el primer evento y se rellena con el tracker de `merge`.
+
+| `conf_min` | `min_run` | frames rellenados | a < 5 m del balón |
+|---|---|---|---|
+| 0,30 | 3 | 10,3 % | 68,5 % |
+| **0,50** | **3** | 6,3 % | 87,1 % |
+| 0,50 | 8 | 4,2 % | 92,0 % |
+| 0,70 | 3 | 5,4 % | 88,6 % |
+
+- Control con detecciones de otra ventana y el mismo ancla: 4,6 % a menos de 5 m. La precisión viene del
+  detector, no del ancla.
+- `conf_seed` casi no cambia nada; se queda en 0,50.
+- `margin_m` pasa a 2,0 m por criterio físico: la misma tolerancia que `slack_m`.
+- Entre eventos la verdad es una recta, así que solo se usa la cifra a 5 m. Son ventanas sin elegir por
+  dificultad, y los valores ordenan ajustes, no se trasladan al partido.
+
+**Modelo.** `degrade(fill=True)` simula el relleno en parte de los frames perdidos, con rangos amplios:
+5–60 % de lo perdido, 60–95 % de tramos correctos y errores de 5–25 m en los demás. La variable `filled`
+marca esos frames. Dos modelos con los mismos 5 partidos; 2 partidos retenidos por 3 semillas de
+degradación, HMM:
+
+| modelo | IDSSE degradado | IDSSE degradado + relleno | SkillCorner `detected` |
+|---|---|---|---|
+| sin relleno | 0,467 | 0,505 | 0,371 |
+| **con relleno** | 0,472 | **0,527** | 0,372 |
+
+Las cifras son spellF1, con desviación de 0,02–0,04. Rellenar ayuda, entrenar sabiéndolo añade algo más,
+y no se pierde nada donde no hay relleno. La ganancia depende de los rangos supuestos y viene de una sola
+semilla de entrenamiento. La decisión no usa ninguna cifra del partido.
+
+`evaluation/results/external.csv` usa ya el balón enriquecido: formato válido, 2 ejecuciones completas
+idénticas, SHA-256 `8db899a162b5987dcfe6d41be9d5f8fd9f81c6bcb414fca71a2437ef9f03d470`.
+
 ## Pendiente
 
-1. **Balón enriquecido:** `external/predict.py` usa el ATD crudo. Las detecciones crudas con los pesos
-   originales son válidas y no hay que repetirlas. Falta volver a generar `merge` con umbrales físicos
-   o externos, porque `conf_min` y `margin_m` salieron de este partido.
+1. **Balón enriquecido:** falta medir cuánto rellena una cámara táctica; solo se puede acotar con datos externos.
 2. **SkillCorner:** probar si añadirlo al entrenamiento mejora, con partidos retenidos.
 3. **Repo público:** retirar lo contaminado (`labeler/` como validación, `possession/prelabel.py`,
    `enrich/finetune_ball.py`, `enrich/jersey_team.py`, `V1_PARAMS`) y decidir qué pasa con el historial.

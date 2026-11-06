@@ -1,5 +1,6 @@
 """Label the provided match with the models trained on external data.
 
+    docker compose run --rm dev python -m enrich.merge
     docker compose run --rm dev python -m external.train --final
     docker compose run --rm dev python -m external.predict
     docker compose run --rm dev python evaluation/validate_submission.py evaluation/results/external.csv
@@ -13,6 +14,7 @@ import os
 
 import numpy as np
 
+from enrich.merge import SOURCE_DETECTOR
 from external.features import compute
 from external.train import decode, load
 from possession.io import GAME, GAMES, PITCH, ROOT, graded_blocks, kickoff_frames, load_atd
@@ -22,12 +24,12 @@ OUT = os.path.join(ROOT, "evaluation", "results", "external.csv")
 
 def match_view(first, last, half):
     """One graded block of the provided tracking as a view: metres, pitch centred on (0, 0)."""
-    atd = load_atd()
+    atd = load_atd(enriched=True)
     scale = np.array(PITCH, dtype=np.float64)
     rows = slice(first, last + 1)
     centre = lambda xy: (xy.astype(np.float64) - 0.5) * scale  # noqa: E731
     return {"players": centre(atd["players"][rows, :, :2]), "team": atd["team"].astype(int),
-            "ball": centre(atd["ball"][rows]), "half": np.full(last - first + 1, half),
+            "ball": centre(atd["ball"][rows]), "filled": atd["ball_source"][rows] >= SOURCE_DETECTOR, "half": np.full(last - first + 1, half),
             "pitch": tuple(PITCH)}
 
 
