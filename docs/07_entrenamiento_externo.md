@@ -135,7 +135,29 @@ equipo en `possession.group`.
 - Muerto o vivo coincide en el 89,8 % de los frames; el equipo, en el 74,9 % de los vivos con tracking.
 - El 25,6 % de los frames no tiene tracking y su verdad es `D` en el 96,5 %, quizá por construcción.
   Sin ellos, el HMM da 0,385 / 0,783.
-- La licencia MIT habla de software y no menciona los datos: aclararlo antes de entrenar con ellos.
+- La licencia es MIT y el equipo revisó que no prohíbe este uso. El README pide citar la fuente.
+
+**¿Entrenar también con SkillCorner?** Se probó con los mismos 5 partidos de IDSSE y validación cruzada
+en 4 bloques, de modo que cada partido de SkillCorner queda retenido una vez. Solo se entrena con frames
+con tracking y cada fuente pesa lo mismo. El criterio se fijó antes de ver cifras: adoptarlo si mejora
+SkillCorner retenido sin empeorar IDSSE más que el ruido (desviación 0,022).
+
+```bash
+docker compose run --rm dev python -m external.skillcorner_training
+```
+
+| modelo | SkillCorner spellF1 | macroF1 | equipo | posesiones | IDSSE degradado + relleno, spellF1 |
+|---|---|---|---|---|---|
+| **solo IDSSE** | 0,372 | 0,804 | 74,2 % | 323 | **0,527** |
+| + SkillCorner en los dos modelos | 0,490 | 0,869 | 83,5 % | 227 | 0,499 |
+| + SkillCorner solo en el de equipo | 0,411 | 0,819 | 76,3 % | 262 | 0,504 |
+
+- **Decisión: no se adopta.** Ambas variantes ganan en los 20 partidos de SkillCorner, pero pierden 0,028 y
+  0,023 en IDSSE, por encima del ruido, aunque por poco en el segundo caso.
+- La ganancia puede ser, en parte, aprender la definición de SkillCorner: es mucho mayor cuando también
+  entrena su `D`, y predice 227 posesiones frente a 318 reales.
+- Es una sola semilla y un solo peso entre fuentes. No se sabe cuál de las dos fuentes se parece más al
+  partido, y no se puede medir sin usarlo.
 
 ## Balón enriquecido
 
@@ -163,6 +185,14 @@ balón tras el primer evento y se rellena con el tracker de `merge`.
   detector, no del ancla.
 - `conf_seed` casi no cambia nada; se queda en 0,50.
 - `margin_m` pasa a 2,0 m por criterio físico: la misma tolerancia que `slack_m`.
+- `keep_conf`, `anchor_s`, `interp_max` y `max_speed_ms` venían de la etapa anterior. Se comprobaron de
+  uno en uno (`fill_eval params`), con interpolación. El criterio, fijado antes: cambiar solo si suben los
+  frames bien rellenados y la precisión no baja más de 1 punto.
+  - **`keep_conf` pasa de 0,70 a 0,60:** frames rellenados a < 5 m del 7,0 % al 8,7 %, con precisión de
+    88,4 % a 88,9 %.
+  - `interp_max` 10 también lo cumple (8,5 %, 88,2 %), pero se queda en 5: entre eventos la verdad es una
+    recta, y eso favorece a la interpolación por construcción.
+  - `anchor_s` y `max_speed_ms` no cambian ese 7,0 %, así que se quedan igual.
 - Entre eventos la verdad es una recta, así que solo se usa la cifra a 5 m. Son ventanas sin elegir por
   dificultad, y los valores ordenan ajustes, no se trasladan al partido.
 
@@ -180,13 +210,13 @@ Las cifras son spellF1, con desviación de 0,02–0,04. Rellenar ayuda, entrenar
 y no se pierde nada donde no hay relleno. La ganancia depende de los rangos supuestos y viene de una sola
 semilla de entrenamiento. La decisión no usa ninguna cifra del partido.
 
-`evaluation/results/external.csv` usa ya el balón enriquecido: formato válido, 2 ejecuciones completas
-idénticas, SHA-256 `8db899a162b5987dcfe6d41be9d5f8fd9f81c6bcb414fca71a2437ef9f03d470`.
+`evaluation/results/external.csv` usa ya el balón enriquecido: formato válido, 2 predicciones idénticas,
+SHA-256 `7926be7acd148c8d1f39db05ec3f3a2e8beddf7806d9e49dc4bf76f4aaea92eb`.
 
 ## Pendiente
 
 1. **Balón enriquecido:** falta medir cuánto rellena una cámara táctica; solo se puede acotar con datos externos.
-2. **SkillCorner:** probar si añadirlo al entrenamiento mejora, con partidos retenidos.
-3. **Repo público:** decidir qué pasa con el historial de git, que aún contiene lo retirado.
+2. **Equipo con balón:** sigue siendo lo más débil. SkillCorner lo mejora, pero con el coste en IDSSE descrito arriba.
+3. **Repo público:** el historial de git se conserva y contiene lo retirado.
 4. **Consulta a la organización:** si las estadísticas agregadas del partido que ve un asistente de IA
    cuentan como "subir datos".

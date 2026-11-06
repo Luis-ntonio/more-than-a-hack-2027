@@ -32,7 +32,7 @@ PARAMS = {
                             # out of the pitch is out of play. Same tolerance as slack_m
     "anchor_s": 1.0,        # an ATD position this recent anchors the start of a gap
     "min_run": 3,           # accepted runs shorter than this are dropped...
-    "keep_conf": 0.70,      # ...unless every frame in them is at least this confident
+    "keep_conf": 0.60,      # ...unless every frame in them is at least this confident (SoccerTrack)
     "interp_max": 5,        # holes up to this many frames between accepted positions are filled
 }
 

@@ -2,6 +2,7 @@
 
     docker compose run --rm gpu python -m external.fill_eval detect
     docker compose run --rm dev python -m external.fill_eval sweep
+    docker compose run --rm dev python -m external.fill_eval params
 
 A window runs from one anchored event to the next. The ball is known at the first event, as the last
 ATD position is before a real gap; it is then hidden, the frames in between go through the detector
@@ -16,7 +17,7 @@ import os
 
 import numpy as np
 
-from enrich.merge import PARAMS, fill_gap
+from enrich.merge import PARAMS, fill_gap, interpolate_holes
 from external import soccertrack as st
 from external.detector_eval import HALF_LENGTH, HALF_WIDTH, LABELS, Camera
 
@@ -25,6 +26,10 @@ MIN_FRAMES, MAX_FRAMES = 25, 100
 PATH = os.path.join(st.DATA_DIR, "fill_windows.npz")
 SWEEP = [dict(conf_min=c, conf_seed=s, min_run=r)
          for c in (0.05, 0.1, 0.2, 0.3, 0.5, 0.7) for s in (0.5, 0.7) for r in (3, 8)]
+PARAM_SWEEP = ([{}] + [{"keep_conf": v} for v in (0.5, 0.6, 0.8, 0.9, 1.01)]
+               + [{"anchor_s": v} for v in (0.5, 2.0, 4.0)]
+               + [{"interp_max": v} for v in (0, 2, 10, 25)]
+               + [{"max_speed_ms": v} for v in (25.0, 30.0, 50.0)])
 
 
 def ball_of(match):
@@ -64,11 +69,12 @@ def detect(args):
     np.savez_compressed(PATH, **out)
 
 
-def fill_windows(z, match, p, control=False):
+def fill_windows(z, match, p, control=False, interp=False):
     """Per frame of every window: filled flag and distance to the truth, plus the last frame's.
 
     control feeds each window the detections of the next one, which have nothing to do with its
     ball: what still counts as right then comes from the anchor, not from the detector.
+    interp also fills short holes as merge does, from the anchor onwards.
     """
     ball = ball_of(match)
     frames = z[match + "_frames"]
@@ -88,6 +94,11 @@ def fill_windows(z, match, p, control=False):
             other = [lookup[f] for f in range(c + 1, e + 1)]
             rows = [other[j % len(other)] for j in range(len(rows))]
         acc = fill_gap(cands[rows], ball[a - 1], p)
+        if interp:
+            track = np.vstack([ball[a - 1], acc[:, :2]])
+            track, _ = interpolate_holes(track, np.zeros(len(track), dtype=np.int8), p)
+            acc[:, :2] = track[1:]
+            acc[:, 2] = np.where(np.isfinite(track[1:, 0]), 1.0, np.nan)
         t = np.linspace(0, 1, b - a + 1)[1:, None]
         truth = ball[a - 1] + t * (ball[b - 1] - ball[a - 1])
         hit = np.isfinite(acc[:, 2])
@@ -127,13 +138,26 @@ def sweep(args):
             conf_min, filled.mean(), (filled & (dist < 5)).sum() / max(filled.sum(), 1)))
 
 
+def params(args):
+    """One parameter at a time around enrich.merge's values, with merge's interpolation."""
+    z = np.load(PATH)
+    print("{:<26} {:>8} {:>9} {:>9}".format("override", "filled", "ok5|fill", "ok5|all"))
+    for override in PARAM_SWEEP:
+        parts = [fill_windows(z, m, {**PARAMS, **override}, interp=True) for m in st.MATCHES]
+        filled = np.concatenate([x[0] for x in parts])
+        dist = np.concatenate([x[1] for x in parts])
+        ok5 = filled & (dist < 5)
+        print("{:<26} {:>8.1%} {:>9.1%} {:>9.1%}".format(
+            str(override or "merge"), filled.mean(), ok5.sum() / max(filled.sum(), 1), ok5.mean()))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("step", choices=["detect", "sweep"])
+    parser.add_argument("step", choices=["detect", "sweep", "params"])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--margin-m", type=float, default=2.0)
     args = parser.parse_args()
-    {"detect": detect, "sweep": sweep}[args.step](args)
+    {"detect": detect, "sweep": sweep, "params": params}[args.step](args)
 
 
 if __name__ == "__main__":
