@@ -101,9 +101,8 @@ propias del vídeo al campo.
 (frames 11.185–18.684): H 3.454, A 2.577 y D 1.469 frames, con **17 posesiones** de 14,2 s de media.
 El resto es `X`. El GT del partido completo es **privado**.
 
-Es para verificar que el pipeline es correcto, **no para elegir entre variantes**. Con 17 posesiones,
-la varianza es enorme: un error mueve el spellF1 unos 6 puntos. Los propios baselines lo demuestran,
-porque la ventana pública elige `smooth125` y el partido completo prefiere `smooth50`.
+Tras la aclaración del 3 de noviembre, esta solución no lo usa: ni para validar ni para elegir entre
+variantes.
 
 ---
 
@@ -145,15 +144,14 @@ starter/
   utils.py                  dibujo del campo
   01/02/03_*.ipynb          notebooks guiados
 data/                       datos del partido (gitignored)
-analysis/                   [nuevo] EDA y diagnósticos, solo agregados (caché gitignored)
-docs/                       [nuevo] estos documentos y figuras
-possession/                 [nuevo] el modelo: lectura, variables, v0/v1, pre-etiquetador, HMM
+docs/                       [nuevo] estos documentos
+external/                   [nuevo] la solución: datos externos, variables, entrenamiento, predicción
+possession/                 [nuevo] lectura de los datos del partido y decodificador HMM
 enrich/                     [nuevo] visión con GPU (Roboflow) y artefacto fijo de detecciones
-labeler/                    [nuevo] etiquetador web, desfase de anotadores, visualizador
 docker/                     [nuevo] imágenes dev y GPU
 ```
 
-Cómo encajan estas piezas: [06 · Flujo del modelo](06_flujo_del_modelo.md).
+Cómo encajan estas piezas: [07 · Entrenamiento con datos externos](07_entrenamiento_externo.md).
 
 Baselines del repo (los cuatro usan el mismo algoritmo y solo cambia la ventana del voto):
 
@@ -183,8 +181,9 @@ del cierre. Los resultados se publican antes del 26 de noviembre de 2026.
 - Se permite **cualquier método**, siempre que los organizadores puedan acceder a él e
   inspeccionarlo, y que el documento lo explique. Se permiten modelos preentrenados, datos externos y
   LLMs.
-- **Prohibido** etiquetar a mano la submission. Sí se permiten **pequeñas cantidades de etiquetado
-  manual para entrenar o validar** un modelo.
+- **Prohibido** etiquetar a mano el partido, incluso para validar. La aclaración de la organización del
+  3 de noviembre de 2026 tiene prioridad sobre `RULES.md`: el material del partido solo puede ser
+  entrada, nunca material para entrenar, ajustar, calibrar ni validar.
 - Prohibido usar el GT privado o cualquier otra fuente de posesión corregida de este partido.
 - Equipos de 3 a 5 personas.
 - Datos con licencia solo para la competición: no redistribuirlos ni publicar derivados que los

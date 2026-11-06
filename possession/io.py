@@ -31,17 +31,13 @@ def _track_teams(meta_path):
 
 def load_atd(game=GAME, enriched=False, source="tactical"):
     """ATD as arrays: players (n, slots, 3) x/y/speed, ball (n, 2) x/y, team (slots,), indexed by
-    that source's video frame (source="broadcast" is on the broadcast timeline, see
-    possession/broadcast.py).
+    that source's video frame.
 
-    Coordinates stay normalised 0-1 here; features.py converts to metres. enriched=True loads the
-    copy whose ball gaps were filled from the video (enrich/merge.py), with ball_source and
+    Coordinates stay normalised 0-1 here. enriched=True loads the copy whose ball gaps were filled from the video (enrich/merge.py), with ball_source and
     ball_conf added.
     """
     if enriched:
-        # enriched="broadcast": the copy that also uses the ball seen in the broadcast video
-        suffix = "_bc" if enriched == "broadcast" else ""
-        path = os.path.join(CACHE_DIR, "enriched", "{}_atd_enriched{}.npz".format(game, suffix))
+        path = os.path.join(CACHE_DIR, "enriched", "{}_atd_enriched.npz".format(game))
         if not os.path.isfile(path):
             raise SystemExit("missing {}: run python -m enrich.merge".format(path))
         z = np.load(path)
@@ -85,22 +81,6 @@ def load_homography(game=GAME, source="tactical"):
     os.makedirs(CACHE_DIR, exist_ok=True)
     np.save(cache, matrix)
     return matrix
-
-
-def load_smart_tagging(game=GAME):
-    """Smart Tagging instances as a DataFrame with video-frame bounds f0/f1."""
-    path = require(["smart_tagging"], game)[0]
-    rows = []
-    for inst in ET.parse(path).getroot().iter("instance"):
-        row = {"start": float(inst.findtext("start")), "end": float(inst.findtext("end")),
-               "code": inst.findtext("code").strip().upper()}
-        for label in inst.findall("label"):
-            row[label.findtext("group")] = label.findtext("text")
-        rows.append(row)
-    tags = pd.DataFrame(rows)
-    tags["f0"] = (tags["start"] * FPS).round().astype(int)
-    tags["f1"] = (tags["end"] * FPS).round().astype(int)
-    return tags
 
 
 def graded_blocks(game=GAME):

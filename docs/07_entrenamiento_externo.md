@@ -6,9 +6,10 @@ prioridad sobre `RULES.md` y sobre lo anterior: el material del partido provisto
 prohibidas, incluso para validar. Si un número del partido cambia un parámetro del pipeline, es
 calibración.
 
-Por eso, los documentos 05 y 06 describen un enfoque **retirado**: el pre-etiquetador, sus cifras y
-sus etiquetas ya no forman parte de la solución. El trabajo nuevo está en la rama `external-training`
-y en el paquete `external/`, que no lee etiquetas a mano, GT ni resultados anteriores.
+Antes de esa aclaración el equipo usó otro enfoque, con etiquetas a mano sobre el partido y parámetros
+ajustados con él. Ese enfoque está **retirado**: su código, sus documentos y sus cifras se quitaron del
+repositorio, y las etiquetas nunca estuvieron en él. La solución está en el paquete `external/`, que no
+lee etiquetas a mano, GT ni resultados anteriores.
 
 ## Flujo
 
@@ -71,7 +72,6 @@ Entrenado con 5 partidos y evaluado en 2 retenidos (`J03WOY`, `J03WR9`):
 
 - Pesar las emisiones del HMM entre ×0,5 y ×2 cambia el spellF1 menos de 0,01, así que se queda en ×1.
 - Las cifras no predicen el resultado en el partido real: el nivel de degradación es una suposición.
-  Tampoco se comparan con las de 05, que usan otros partidos y otra verdad.
 
 ## Detector de balón
 
@@ -187,7 +187,6 @@ idénticas, SHA-256 `8db899a162b5987dcfe6d41be9d5f8fd9f81c6bcb414fca71a2437ef9f0
 
 1. **Balón enriquecido:** falta medir cuánto rellena una cámara táctica; solo se puede acotar con datos externos.
 2. **SkillCorner:** probar si añadirlo al entrenamiento mejora, con partidos retenidos.
-3. **Repo público:** retirar lo contaminado (`labeler/` como validación, `possession/prelabel.py`,
-   `enrich/finetune_ball.py`, `enrich/jersey_team.py`, `V1_PARAMS`) y decidir qué pasa con el historial.
+3. **Repo público:** decidir qué pasa con el historial de git, que aún contiene lo retirado.
 4. **Consulta a la organización:** si las estadísticas agregadas del partido que ve un asistente de IA
    cuentan como "subir datos".

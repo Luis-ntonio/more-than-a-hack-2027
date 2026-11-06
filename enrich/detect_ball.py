@@ -1,19 +1,10 @@
 """Detect the ball in the tactical video with the Roboflow sports YOLO model where the ATD lost it.
 
-    docker compose run --rm gpu python -m enrich.detect_ball --mode calibrate   # measure first
-    docker compose run --rm gpu python -m enrich.detect_ball --mode missing     # the real run
+    docker compose run --rm gpu python -m enrich.detect_ball
 
-calibrate  a seeded sample of graded frames where the ATD *does* have the ball, so each detection
-           can be checked against it. Prints recall and precision in metres per tiling, nothing
-           per frame. Optimistic by construction: a ball the ATD sees is an easier ball.
-missing    every graded frame where the ATD has no ball. Writes the top-K candidates per frame
-           (pixels + confidence) to cache/enriched/<game>_ball_detections.npz; merge.py decides
-           which of them become ball positions.
-visible    every graded frame where the ATD does have the ball, to <game>_ball_detections_visible.npz.
-           With missing it covers the whole match: the detector's unsmoothed path, for touches.
-windows    seeded stretches where the ATD has the ball on every frame, saved separately so that
-           `merge --simulate` can hide the ATD ball and measure how well the gap filling recovers
-           it. Same optimism caveat as calibrate.
+Takes every graded frame where the ATD has no ball and writes the top-K candidates per frame (pixels
++ confidence) to cache/enriched/<game>_ball_detections.npz; merge.py decides which of them become
+ball positions. Weights and tiling were chosen on external video (external.detector_eval).
 
 Everything runs locally on the GPU container. Output is derived match data: cache/ is gitignored.
 """
@@ -28,15 +19,15 @@ import time
 import cv2
 import numpy as np
 
-from enrich.geometry import pixels_to_pitch
 from games import GAME, video_path
-from possession.io import CACHE_DIR, FPS, PITCH, ROOT, graded_blocks, load_atd, load_homography
+from possession.io import CACHE_DIR, ROOT, graded_blocks, load_atd
 
 OUT_DIR = os.path.join(CACHE_DIR, "enriched")
 WEIGHTS = os.path.join(ROOT, "models", "football-ball-detection.pt")
 TOP_K = 5
 DEDUPE_PX = 12          # candidates closer than this (overlapping tiles) are the same object
 SEEK_GAP = 250          # beyond this many frames, seek instead of decoding through
+TILING = "tiles640"     # chosen on SoccerTrack (external.detector_eval)
 TILINGS = {
     # Roboflow's own example slices the frame into 640 px tiles for the ball (InferenceSlicer).
     "tiles640": {"tile": 640, "overlap": 128, "imgsz": 640},
@@ -164,175 +155,36 @@ def graded_frames():
     return np.concatenate([np.arange(first, last + 1) for _, first, last in graded_blocks()])
 
 
-def calibrate(args, atd, homography):
-    rng = np.random.default_rng(args.seed)
-    graded = graded_frames()
-    visible = graded[np.isfinite(atd["ball"][graded, 0])]
-    sample = np.sort(rng.choice(visible, size=min(args.sample, len(visible)), replace=False))
-    scale = np.array(PITCH, dtype=np.float64)
-    truth = atd["ball"][sample].astype(np.float64) * scale
-    print("calibration: {} graded frames where the ATD has the ball (seed {})".format(
-        len(sample), args.seed))
-    for tiling in args.tilings:
-        detector = BallDetector(args.weights, tiling, args.conf)
-        det = run(detector, sample, args.batch, tiling)
-        dist = np.full((len(sample), TOP_K), np.nan)
-        for i, frame in enumerate(sample):
-            x, y = pixels_to_pitch(homography[frame], det[i, :, 0], det[i, :, 1])
-            dist[i] = np.hypot(x * scale[0] - truth[i, 0], y * scale[1] - truth[i, 1])
-        top_conf = det[:, 0, 2]
-        top_dist = dist[:, 0]
-        any_det = np.isfinite(top_conf)
-        print("\n== {} ==".format(tiling))
-        print("  any detection        {:6.1%}".format(any_det.mean()))
-        for metres in (1, 2, 5):
-            print("  top-1 within {} m     {:6.1%}   any of top-{} {:6.1%}".format(
-                metres, np.mean(top_dist < metres), TOP_K, np.mean(np.nanmin(
-                    np.where(np.isfinite(dist), dist, np.inf), axis=1) < metres)))
-        print("  conf >=   coverage   precision@2m")
-        for t in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7):
-            keep = top_conf >= t
-            precision = np.mean(top_dist[keep] < 2) if keep.any() else float("nan")
-            print("    {:.1f}     {:6.1%}     {:6.1%}".format(t, keep.mean(), precision))
-        if args.diagnose:
-            diagnose(sample, det, dist, homography, atd, scale)
-
-
-def diagnose(sample, det, dist, homography, atd, scale):
-    """Why top-1 misses: frame misalignment, or a fixed object the model keeps firing on."""
-    print("  -- diagnose")
-    # 1. alignment: score candidates against the ATD ball k frames away
-    for k in (-50, -25, -10, -5, -2, -1, 0, 1, 2, 5, 10, 25, 50):
-        shifted = np.clip(sample + k, 0, len(atd["ball"]) - 1)
-        truth = atd["ball"][shifted].astype(np.float64) * scale
-        hits = []
-        for i, frame in enumerate(sample):
-            x, y = pixels_to_pitch(homography[frame], det[i, :, 0], det[i, :, 1])
-            d = np.hypot(x * scale[0] - truth[i, 0], y * scale[1] - truth[i, 1])
-            hits.append(np.nanmin(np.where(np.isfinite(d), d, np.inf)) < 2)
-        print("     truth at frame{:+4d}: any-of-top-5 within 2 m {:6.1%}".format(k, np.mean(hits)))
-    # 2. hotspots: do the misses pile up on the same pixels?
-    miss = ~(dist[:, 0] < 2) & np.isfinite(det[:, 0, 2])
-    cells = np.floor(det[miss, 0, :2] / 40).astype(int)
-    if len(cells):
-        uniq, counts = np.unique(cells, axis=0, return_counts=True)
-        order = np.argsort(-counts)[:5]
-        print("     top-1 misses: {}, in {} distinct 40 px cells; busiest cells:".format(
-            int(miss.sum()), len(uniq)))
-        for j in order:
-            print("       pixel ~({:4d},{:4d})  {:5.1%} of misses".format(
-                uniq[j][0] * 40 + 20, uniq[j][1] * 40 + 20, counts[j] / miss.sum()))
-    hit = dist[:, 0] < 2
-    for name, sel in (("hits", hit), ("misses", miss)):
-        if sel.any():
-            print("     {:<7} conf median {:.2f}  box px median {:.1f}  top-1 dist median {:.1f} m".format(
-                name, np.median(det[sel, 0, 2]), np.median(det[sel, 0, 3]),
-                np.median(dist[sel, 0])))
-
-
 def detect_missing(args, atd):
     graded = graded_frames()
     wanted = graded[~np.isfinite(atd["ball"][graded, 0])]
     if args.limit:
         wanted = wanted[:args.limit]
     print("{} graded frames without ATD ball".format(len(wanted)))
-    detector = BallDetector(args.weights, args.tilings[0], args.conf)
-    det = run(detector, wanted, args.batch, args.tilings[0])
+    detector = BallDetector(args.weights, TILING, args.conf)
+    det = run(detector, wanted, args.batch, TILING)
     os.makedirs(OUT_DIR, exist_ok=True)
     out = os.path.join(OUT_DIR, "{}_ball_detections.npz".format(GAME))
     np.savez_compressed(out, frames=wanted.astype(np.int32), det=det)
     with open(args.weights, "rb") as handle:
         weights_sha = hashlib.sha256(handle.read()).hexdigest()
     with open(out[:-len(".npz")] + "_meta.json", "w") as handle:
-        json.dump({"tiling": args.tilings[0], "conf": args.conf, "top_k": TOP_K,
+        json.dump({"tiling": TILING, "conf": args.conf, "top_k": TOP_K,
                    "weights_sha256": weights_sha, "limit": args.limit}, handle, indent=1)
     with_det = np.isfinite(det[:, 0, 2])
     print("frames with >=1 candidate: {:.1%} -> {}".format(with_det.mean(), os.path.relpath(out, ROOT)))
 
 
-def detect_visible(args, atd):
-    """Detections on every graded frame that has an ATD ball: with --mode missing, the whole match.
-    The detector's ball is not smoothed, so its path shows touches the ATD's does not."""
-    graded = graded_frames()
-    wanted = graded[np.isfinite(atd["ball"][graded, 0])]
-    if args.limit:
-        wanted = wanted[:args.limit]
-    print("{} graded frames with ATD ball".format(len(wanted)))
-    detector = BallDetector(args.weights, args.tilings[0], args.conf)
-    det = run(detector, wanted, args.batch, args.tilings[0])
-    os.makedirs(OUT_DIR, exist_ok=True)
-    out = os.path.join(OUT_DIR, "{}_ball_detections_visible.npz".format(GAME))
-    np.savez_compressed(out, frames=wanted.astype(np.int32), det=det)
-    print("frames with >=1 candidate: {:.1%} -> {}".format(np.isfinite(det[:, 0, 2]).mean(),
-                                                         os.path.relpath(out, ROOT)))
-
-
-def detect_windows(args, atd):
-    """Detections on contiguous stretches with the ATD ball visible, plus the frame before each."""
-    rng = np.random.default_rng(args.seed)
-    length = args.window
-    visible = np.isfinite(atd["ball"][:, 0])
-    starts = []
-    for half, first, last in graded_blocks():
-        if args.last_min:  # only the last minutes of the 2nd half (enrich.finetune_ball's held-out)
-            if half != 2:
-                continue
-            first = max(first, last - args.last_min * 60 * FPS)
-        ok = visible[first:last + 1]
-        csum = np.concatenate(([0], np.cumsum(ok)))
-        full = np.flatnonzero(csum[length + 1:] - csum[:-length - 1] == length + 1) + first
-        starts.append(full)  # window [s+1, s+length], anchor s, all visible
-    starts = np.concatenate(starts)
-    chosen = []
-    for s in rng.permutation(starts):
-        if all(abs(s - c) > length for c in chosen):
-            chosen.append(int(s))
-        if len(chosen) == args.n_windows:
-            break
-    chosen = np.sort(np.array(chosen))
-    wanted = np.concatenate([np.arange(s + 1, s + 1 + length) for s in chosen])
-    print("{} windows of {} frames ({} frames)".format(len(chosen), length, len(wanted)))
-    detector = BallDetector(args.weights, args.tilings[0], args.conf)
-    det = run(detector, wanted, args.batch, args.tilings[0])
-    os.makedirs(OUT_DIR, exist_ok=True)
-    out = os.path.join(OUT_DIR, "{}_ball_detections_windows{}.npz".format(GAME, args.suffix))
-    np.savez_compressed(out, anchors=chosen.astype(np.int32), length=length,
-                        frames=wanted.astype(np.int32), det=det)
-    print("-> " + os.path.relpath(out, ROOT))
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mode", choices=["calibrate", "missing", "visible", "windows"], required=True)
-    parser.add_argument("--tilings", nargs="+", choices=list(TILINGS), default=None,
-                        help="calibrate: which to compare (default all); missing: the first is used")
     parser.add_argument("--conf", type=float, default=0.05, help="keep candidates above this")
     parser.add_argument("--batch", type=int, default=8, help="frames per GPU batch")
-    parser.add_argument("--sample", type=int, default=2000, help="calibrate: frames to check")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--weights", default=WEIGHTS,
-                        help="detector weights (models/football-ball-detection-ft.pt: enrich.finetune_ball)")
-    parser.add_argument("--diagnose", action="store_true",
-                        help="calibrate: test frame alignment and look for fixed false positives")
-    parser.add_argument("--limit", type=int, default=0, help="missing, visible: only the first N (smoke test)")
-    parser.add_argument("--n-windows", type=int, default=40, help="windows: how many stretches")
-    parser.add_argument("--window", type=int, default=125, help="windows: frames per stretch")
-    parser.add_argument("--last-min", type=int, default=0,
-                        help="windows: draw them from the last N minutes of the 2nd half only")
-    parser.add_argument("--suffix", default="", help="windows: appended to the output file name")
+    parser.add_argument("--weights", default=WEIGHTS, help="detector weights")
+    parser.add_argument("--limit", type=int, default=0, help="only the first N frames (smoke test)")
     args = parser.parse_args()
-    args.tilings = args.tilings or (list(TILINGS) if args.mode == "calibrate" else ["tiles640"])
     if not os.path.isfile(args.weights):
         raise SystemExit("missing {}: run  bash enrich/download_models.sh".format(args.weights))
-    atd = load_atd()
-    if args.mode == "calibrate":
-        calibrate(args, atd, load_homography())
-    elif args.mode == "windows":
-        detect_windows(args, atd)
-    elif args.mode == "visible":
-        detect_visible(args, atd)
-    else:
-        detect_missing(args, atd)
+    detect_missing(args, load_atd())
 
 
 if __name__ == "__main__":

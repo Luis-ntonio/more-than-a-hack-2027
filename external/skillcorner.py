@@ -1,4 +1,4 @@
-"""SkillCorner open data: 10 A-League matches of real broadcast tracking at 10 fps.
+"""SkillCorner open data: 20 A-League matches of real broadcast tracking at 10 fps.
 
     docker compose run --rm dev python -m external.skillcorner download
     docker compose run --rm dev python -m external.skillcorner schema

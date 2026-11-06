@@ -1,7 +1,6 @@
 """Fill the ATD's ball gaps with detector candidates and save an enriched copy under a new path.
 
     docker compose run --rm dev python -m enrich.merge
-    docker compose run --rm dev python -m enrich.merge --simulate   # measure on hidden ATD balls
 
 Reads the original ATD (never modified) and cache/enriched/<game>_ball_detections.npz, writes
 cache/enriched/<game>_atd_enriched.npz with the same arrays as possession.io.load_atd plus
@@ -23,7 +22,7 @@ from enrich.geometry import pixels_to_pitch
 from games import GAME
 from possession.io import FPS, PITCH, ROOT, graded_blocks, load_atd, load_homography
 
-SOURCE_NONE, SOURCE_ATD, SOURCE_DETECTOR, SOURCE_INTERP, SOURCE_BROADCAST = 0, 1, 2, 3, 4
+SOURCE_NONE, SOURCE_ATD, SOURCE_DETECTOR, SOURCE_INTERP = 0, 1, 2, 3
 PARAMS = {
     "conf_min": 0.50,       # below this a candidate is ignored (chosen on SoccerTrack: external.fill_eval)
     "conf_seed": 0.50,      # starting a track with nothing to anchor it; no effect on SoccerTrack
@@ -54,8 +53,7 @@ def candidates_in_metres(det, frames, homography, p):
 
 
 def track_gap(cands, anchor, anchor_age, p):
-    """Greedy forward pass over one gap. Returns (len, c) accepted candidate rows (x/y/conf and any
-    extra columns, such as where it came from), NaN where none."""
+    """Greedy forward pass over one gap. Returns (len, 3) accepted x/y/conf, NaN where none."""
     accepted = np.full((len(cands), cands.shape[2]), np.nan)
     last, age = anchor, anchor_age
     for i, frame_cands in enumerate(cands):
@@ -100,44 +98,6 @@ def fill_gap(cands, anchor, p):
     return drop_short_runs(track_gap(cands, anchor, 0, p), p)
 
 
-SWEEP = [{}, {"conf_min": 0.5}, {"conf_min": 0.7}, {"max_speed_ms": 25.0}, {"min_run": 8},
-         {"conf_seed": 0.8}, {"conf_min": 0.5, "min_run": 8}]
-
-
-def simulate(p, homography, atd, scale, suffix=""):
-    """Hide the ATD ball on windows where it is known, refill them, and score against the ATD."""
-    path = os.path.join(OUT_DIR, "{}_ball_detections_windows{}.npz".format(GAME, suffix))
-    if not os.path.isfile(path):
-        raise SystemExit("missing {}: run enrich.detect_ball --mode windows".format(path))
-    z = np.load(path)
-    anchors, length, frames, det = z["anchors"], int(z["length"]), z["frames"], z["det"]
-    truth = atd["ball"][frames].astype(np.float64) * scale
-    top1 = det[:, 0]
-    tx, ty = np.full(len(frames), np.nan), np.full(len(frames), np.nan)
-    for i, frame in enumerate(frames):
-        tx[i], ty[i] = pixels_to_pitch(homography[frame], top1[i, 0], top1[i, 1])
-    naive = np.hypot(tx * scale[0] - truth[:, 0], ty * scale[1] - truth[:, 1])
-    print("{} windows x {} frames, ATD ball hidden. Naive top-1 (no tracking): {:.1%} within 2 m".format(
-        len(anchors), length, np.mean(naive < 2)))
-    print("{:<40} {:>7} {:>10} {:>10} {:>10}".format(
-        "override", "filled", "ok@2m|fill", "ok@5m|fill", "ok@2m|all"))
-    for override in SWEEP:
-        q = {**p, **override}
-        cands = candidates_in_metres(det, frames, homography, q).reshape(len(anchors), length, -1, 3)
-        filled, dist = [], []
-        for w, anchor in enumerate(anchors):
-            acc = fill_gap(cands[w], atd["ball"][anchor].astype(np.float64) * scale, q)
-            t = truth[w * length:(w + 1) * length]
-            filled.append(np.isfinite(acc[:, 2]))
-            dist.append(np.hypot(acc[:, 0] - t[:, 0], acc[:, 1] - t[:, 1]))
-        filled, dist = np.concatenate(filled), np.concatenate(dist)
-        ok2, ok5 = filled & (dist < 2), filled & (dist < 5)
-        print("{:<40} {:>6.1%} {:>10.1%} {:>10.1%} {:>10.1%}".format(
-            str(override or "default"), filled.mean(), ok2.sum() / max(filled.sum(), 1),
-            ok5.sum() / max(filled.sum(), 1), ok2.mean()))
-    print("optimistic: these windows had a ball the ATD could see; real gaps are harder")
-
-
 def interpolate_holes(ball, source, p):
     """Linear fill of short holes whose both ends are known (ATD or detector)."""
     known = np.isfinite(ball[:, 0])
@@ -154,22 +114,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     for key, value in PARAMS.items():
         parser.add_argument("--" + key.replace("_", "-"), type=type(value), default=value)
-    parser.add_argument("--simulate", action="store_true",
-                        help="score the gap filling on windows where the ATD ball is known")
-    parser.add_argument("--broadcast", action="store_true",
-                        help="also use the ball detected in the broadcast video (enrich."
-                             "detect_ball_broadcast gaps); writes <game>_atd_enriched_bc.npz")
-    parser.add_argument("--windows-suffix", default="",
-                        help="simulate on <game>_ball_detections_windows<suffix>.npz")
     args = parser.parse_args()
     p = {key: getattr(args, key) for key in PARAMS}
-    if args.simulate:
-        return simulate(p, load_homography(), load_atd(), np.array(PITCH, dtype=np.float64),
-                        args.windows_suffix)
 
     det_path = os.path.join(OUT_DIR, "{}_ball_detections.npz".format(GAME))
     if not os.path.isfile(det_path):
-        raise SystemExit("missing {}: run enrich.detect_ball --mode missing first".format(det_path))
+        raise SystemExit("missing {}: run enrich.detect_ball first".format(det_path))
     z = np.load(det_path)
     frames, det = z["frames"], z["det"]
     atd = load_atd()
@@ -181,21 +131,8 @@ def main():
     source = np.where(np.isfinite(ball_m[:, 0]), SOURCE_ATD, SOURCE_NONE).astype(np.int8)
     conf = np.where(source == SOURCE_ATD, 1.0, np.nan)
 
-    # candidate rows: x, y (metres), conf, and 1 if it comes from the broadcast video
-    k = det.shape[1]
-    cands = np.full((n, 2 * k if args.broadcast else k, 4), np.nan)
-    cands[frames, :k, :3] = candidates_in_metres(det, frames, homography, p)
-    cands[frames, :k, 3] = 0.0
-    if args.broadcast:
-        zb = np.load(os.path.join(OUT_DIR, "{}_ball_detections_broadcast.npz".format(GAME)))
-        bc = np.concatenate([zb["pitch"].astype(np.float64) * scale, zb["det"][:, :, 2:3]], axis=2)
-        m = p["margin_m"]
-        bad = ((bc[:, :, 2] < p["conf_min"]) | ~np.isfinite(bc[:, :, 0])
-               | (bc[:, :, 0] < -m) | (bc[:, :, 0] > scale[0] + m)
-               | (bc[:, :, 1] < -m) | (bc[:, :, 1] > scale[1] + m))
-        bc[bad] = np.nan
-        cands[zb["frames"], k:, :3] = bc
-        cands[zb["frames"], k:, 3] = 1.0
+    cands = np.full((n, det.shape[1], 3), np.nan)
+    cands[frames] = candidates_in_metres(det, frames, homography, p)
 
     graded = np.zeros(n, dtype=bool)
     for _, first, last in graded_blocks():
@@ -209,13 +146,13 @@ def main():
         hit = np.isfinite(accepted[:, 2])
         ball_m[start:stop][hit] = accepted[hit, :2]
         conf[start:stop][hit] = accepted[hit, 2]
-        source[start:stop][hit] = np.where(accepted[hit, 3] > 0.5, SOURCE_BROADCAST, SOURCE_DETECTOR)
+        source[start:stop][hit] = SOURCE_DETECTOR
 
     ball_m, source = interpolate_holes(ball_m, source, p)
     ball_m[~graded & (source == SOURCE_INTERP)] = np.nan   # only enrich graded frames
     source[~graded & (source == SOURCE_INTERP)] = SOURCE_NONE
 
-    out = os.path.join(OUT_DIR, "{}_atd_enriched{}.npz".format(GAME, "_bc" if args.broadcast else ""))
+    out = os.path.join(OUT_DIR, "{}_atd_enriched.npz".format(GAME))
     np.savez_compressed(out, players=atd["players"], team=atd["team"],
                         ball=(ball_m / scale).astype(np.float32), ball_source=source,
                         ball_conf=conf.astype(np.float32))
@@ -226,9 +163,6 @@ def main():
     for start, stop in gaps:
         gap_len[start:stop] = (stop - start) / FPS
     filled = missing & (source >= SOURCE_DETECTOR)
-    if args.broadcast:
-        print("from the broadcast video: {:.1%} of missing".format(
-            (missing & (source == SOURCE_BROADCAST)).sum() / missing.sum()))
     print("graded frames: {}   ATD ball missing: {} ({:.1%})".format(
         int(graded.sum()), int(missing.sum()), missing.sum() / graded.sum()))
     print("filled: {:.1%} of missing  (detector {:.1%}, interpolated {:.1%})".format(
