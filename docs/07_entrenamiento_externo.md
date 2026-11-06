@@ -72,11 +72,49 @@ Entrenado con 5 partidos y evaluado en 2 retenidos (`J03WOY`, `J03WR9`):
 - Las cifras no predicen el resultado en el partido real: el nivel de degradación es una suposición.
   Tampoco se comparan con las de 05, que usan otros partidos y otra verdad.
 
+## Detector de balón
+
+Los pesos, el recorte y los umbrales se eligen en vídeo externo, sin usar el partido.
+
+```bash
+docker compose run --rm dev python -m external.soccertrack videos
+docker compose run --rm gpu python -m external.detector_eval detect --name original_tiles640
+docker compose run --rm dev python -m external.pbdet
+docker compose run --rm gpu python -m external.finetune_detector
+docker compose run --rm dev python -m external.detector_eval report --thresholds
+```
+
+**Banco de pruebas: SoccerTrack v2** (CC-BY 4.0), 4 partidos en panorámica 4096×1080 a 25 fps. No trae
+cajas de balón y su trayectoria se interpola entre eventos, así que se puntúa solo en 2 000 eventos
+`PASS` y `DRIVE`, donde el balón está anclado y en el suelo. Los píxeles pasan al campo con el modelo
+ojo de pez, la homografía y una corrección polinómica sobre los 65 puntos clave de cada partido
+(error dejando uno fuera: mediana 0,33–0,56 m). El máximo de acierto aparece con desfase de 0–5 frames
+en los 4 partidos, lo que confirma que la métrica mide algo real.
+
+**Afinado: PBDet-Soccer** (Zenodo 21821917, CC BY 4.0), 2 457 cajas de balón en train, imágenes de
+1280 px. `external/finetune_detector.py` parte de los pesos originales y entrena 30 épocas a 640 px.
+
+| detector | algún candidato | top1 < 2 m | top1 < 5 m | top5 < 2 m | top5 < 5 m |
+|---|---|---|---|---|---|
+| **original, `tiles640`** | 85,7 % | **5,1 %** | **7,0 %** | **9,6 %** | **13,7 %** |
+| original, `full1280` | 66,6 % | 0,8 % | 1,8 % | 1,0 % | 2,4 % |
+| afinado con PBDet, `tiles640` | 41,9 % | 1,0 % | 1,4 % | 1,1 % | 1,7 % |
+
+El azar (posición del balón 5 s después) da 0,1 % en top1 < 2 m.
+
+- **Decisión: pesos originales y `tiles640`.** El afinado se descarta.
+- El afinado mejoró en su propia validación (mAP50 0,70) y empeoró en panorámica, con confianzas que
+  casi nunca pasan de 0,3. Encaja con que PBDet no se parezca a una panorámica, pero la causa no está
+  medida: es una sola ejecución y no se probaron otras recetas.
+- Con el original, la precisión a 2 m sube con la confianza: 5,9 % en 0,05, 6,6 % en 0,30, 7,8 % en 0,50
+  y 12,3 % en 0,70, conservando el 19,9 % de los frames. Sirve para ordenar umbrales. Los valores
+  absolutos no se trasladan: SoccerTrack es mucho más difícil que la cámara táctica.
+
 ## Pendiente
 
-1. **Balón enriquecido:** `external/predict.py` usa el ATD crudo. Para usar Roboflow hay que volver a
-   generar `merge` con umbrales físicos o externos, porque `conf_min` y `margin_m` salieron de este
-   partido. Las detecciones crudas con los pesos originales sí son válidas.
+1. **Balón enriquecido:** `external/predict.py` usa el ATD crudo. Las detecciones crudas con los pesos
+   originales son válidas y no hay que repetirlas. Falta volver a generar `merge` con umbrales físicos
+   o externos, porque `conf_min` y `margin_m` salieron de este partido.
 2. **SkillCorner:** validar con tracking de broadcast real.
 3. **Repo público:** retirar lo contaminado (`labeler/` como validación, `possession/prelabel.py`,
    `enrich/finetune_ball.py`, `enrich/jersey_team.py`, `V1_PARAMS`) y decidir qué pasa con el historial.
