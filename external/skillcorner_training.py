@@ -35,9 +35,9 @@ def training_rows(view, labels, keep):
     return (np.concatenate([x for x, _ in out]), np.concatenate([y for _, y in out]))
 
 
-def load_idsse_training(rng):
+def load_idsse_training(rng, held=VAL_MATCHES):
     rows, labels = [], []
-    for match in [m for m in idsse.MATCHES if m not in VAL_MATCHES]:
+    for match in [m for m in idsse.MATCHES if m not in held]:
         d = idsse.load(match)
         truth = idsse.to_labels(d)
         labels.append(truth)
@@ -62,9 +62,9 @@ def load_skillcorner():
     return out
 
 
-def load_idsse_eval():
+def load_idsse_eval(held=VAL_MATCHES):
     out = []
-    for match in VAL_MATCHES:
+    for match in held:
         d = idsse.load(match)
         truth = idsse.to_labels(d)
         for seed in EVAL_SEEDS:

@@ -1,7 +1,9 @@
-"""Score the models trained on IDSSE on SkillCorner's real broadcast tracking. Trains nothing.
+"""Score saved models on SkillCorner's real broadcast tracking. Trains nothing.
 
-    docker compose run --rm dev python -m external.train --final
     docker compose run --rm dev python -m external.validate_skillcorner
+
+The final team model has now seen SkillCorner, so scoring it here is no longer a held-out figure; the
+held-out ones come from external.skillcorner_training and external.skillcorner_weight.
 
 SkillCorner runs at 10 fps, so positions are interpolated to the 25 fps the features expect. Its
 truth is built by external.skillcorner: another provider's definition of possession, so a score here

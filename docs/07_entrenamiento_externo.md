@@ -16,9 +16,11 @@ lee etiquetas a mano, GT ni resultados anteriores.
 ```bash
 docker compose run --rm dev python -m external.idsse download   # 7 partidos, ~2,6 GB
 docker compose run --rm dev python -m external.idsse parse
+docker compose run --rm dev python -m external.skillcorner download
+docker compose run --rm dev python -m external.skillcorner parse
 docker compose run --rm dev python -m external.train            # 5 partidos, valida en 2
 docker compose run --rm dev python -m enrich.merge              # balón enriquecido
-docker compose run --rm dev python -m external.train --final    # 7 partidos
+docker compose run --rm dev python -m external.train --final    # 7 partidos + SkillCorner en el de equipo
 docker compose run --rm dev python -m external.predict          # evaluation/results/external.csv
 docker compose run --rm dev python evaluation/validate_submission.py evaluation/results/external.csv
 ```
@@ -120,7 +122,7 @@ docker compose run --rm dev python -m external.validate_skillcorner
 ```
 
 Tracking real de broadcast a 10 fps de la A-League 2024/25, en un commit fijado. El README anuncia 10
-partidos, pero `matches.json` lista 20. Los modelos finales de IDSSE se aplican sin cambios, con las
+partidos, pero `matches.json` lista 20. Esta tabla es de los modelos entrenados solo con IDSSE, antes de sumar SkillCorner al de equipo. Se aplican sin cambios, con las
 posiciones interpoladas a 25 fps. La verdad es `D` fuera de una fase de juego y, dentro, el último
 equipo en `possession.group`.
 
@@ -152,12 +154,32 @@ docker compose run --rm dev python -m external.skillcorner_training
 | + SkillCorner en los dos modelos | 0,490 | 0,869 | 83,5 % | 227 | 0,499 |
 | + SkillCorner solo en el de equipo | 0,411 | 0,819 | 76,3 % | 262 | 0,504 |
 
-- **Decisión: no se adopta.** Ambas variantes ganan en los 20 partidos de SkillCorner, pero pierden 0,028 y
-  0,023 en IDSSE, por encima del ruido, aunque por poco en el segundo caso.
+- A peso igual no se adopta ninguna: ambas ganan en los 20 partidos de SkillCorner, pero pierden 0,028 y
+  0,023 en IDSSE, por encima del ruido.
 - La ganancia puede ser, en parte, aprender la definición de SkillCorner: es mucho mayor cuando también
-  entrena su `D`, y predice 227 posesiones frente a 318 reales.
-- Es una sola semilla y un solo peso entre fuentes. No se sabe cuál de las dos fuentes se parece más al
-  partido, y no se puede medir sin usarlo.
+  entrena su `D`, y predice 227 posesiones frente a 318 reales. Por eso se descarta usarlo en el modelo de
+  muerto o vivo.
+
+**Peso de SkillCorner en el modelo de equipo.** Tres semillas, cada una con su par de partidos de IDSSE
+retenidos, y los mismos 4 bloques de SkillCorner. Las diferencias se comparan con el modelo solo IDSSE de
+la misma semilla. El criterio se fijó antes: pérdida media en IDSSE de 0,010 como máximo y mejora en
+SkillCorner en las 3 semillas.
+
+```bash
+docker compose run --rm dev python -m external.skillcorner_weight
+```
+
+| peso | SkillCorner spellF1, diferencia | mínima | IDSSE spellF1, diferencia | ¿pasa? |
+|---|---|---|---|---|
+| **0,10** | +0,031 | +0,026 | −0,007 | **sí** |
+| 0,25 | +0,037 | +0,033 | −0,011 | no |
+| 0,50 | +0,039 | +0,034 | −0,015 | no |
+
+- **Decisión: peso 0,10, solo en el modelo de equipo.** El modelo final entrena con los 7 partidos de IDSSE
+  y los 20 de SkillCorner, que quedan sin datos retenidos: las cifras de esta tabla son la validación.
+- El coste en IDSSE es pequeño pero real: aparece en las 3 semillas (desviación 0,002).
+- No se sabe cuál de las dos fuentes se parece más al partido, y no se puede medir sin usarlo. La mejora
+  es una apuesta razonable, no una garantía.
 
 ## Balón enriquecido
 
@@ -210,13 +232,14 @@ Las cifras son spellF1, con desviación de 0,02–0,04. Rellenar ayuda, entrenar
 y no se pierde nada donde no hay relleno. La ganancia depende de los rangos supuestos y viene de una sola
 semilla de entrenamiento. La decisión no usa ninguna cifra del partido.
 
-`evaluation/results/external.csv` usa ya el balón enriquecido: formato válido, 2 predicciones idénticas,
-SHA-256 `7926be7acd148c8d1f39db05ec3f3a2e8beddf7806d9e49dc4bf76f4aaea92eb`.
+`evaluation/results/external.csv` usa ya el balón enriquecido y el modelo final con SkillCorner: formato
+válido, 2 ejecuciones completas idénticas, SHA-256
+`fd7620d6983295f66f3e9c458883228390fe0d45bef24bcfac62a4ad4436837c`.
 
 ## Pendiente
 
 1. **Balón enriquecido:** falta medir cuánto rellena una cámara táctica; solo se puede acotar con datos externos.
-2. **Equipo con balón:** sigue siendo lo más débil. SkillCorner lo mejora, pero con el coste en IDSSE descrito arriba.
+2. **Equipo con balón:** sigue siendo lo más débil, aun con SkillCorner en el entrenamiento.
 3. **Repo público:** el historial de git se conserva y contiene lo retirado.
 4. **Consulta a la organización:** si las estadísticas agregadas del partido que ve un asistente de IA
    cuentan como "subir datos".

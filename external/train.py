@@ -7,8 +7,9 @@ Two LightGBM models on the features of external/features.py -- dead / alive, the
 alive frames -- trained on degraded IDSSE matches with a simulated detector fill of part of the lost
 ball (external.fill_experiment shows why), both ways round (teams swapped), then a 3-state
 HMM whose transition costs come from the training labels. Scored with the official metrics on
-held-out IDSSE matches, clean and degraded, next to a nearest-player baseline. Nothing here reads
-the provided match.
+held-out IDSSE matches, clean and degraded, next to a nearest-player baseline. The final team model
+also sees SkillCorner at a small weight (external.skillcorner_weight). Nothing here reads the
+provided match.
 """
 import argparse
 import os
@@ -32,6 +33,7 @@ LGB_PARAMS = {"objective": "binary", "learning_rate": 0.05, "num_leaves": 63, "m
               "feature_fraction": 0.7, "bagging_fraction": 0.7, "bagging_freq": 1, "lambda_l2": 1.0,
               "seed": 0, "deterministic": True, "force_row_wise": True, "num_threads": 8, "verbose": -1}
 N_ROUNDS = 300
+SC_WEIGHT = 0.10    # SkillCorner's share of IDSSE's weight in the final team model
 STATES = np.array(["H", "A", "D"])
 
 
@@ -81,8 +83,11 @@ def score(truth, pred):
     return r["spell_f1_mean"], r["macro_f1"], spells
 
 
-def fit(matches, rng, fill=False):
-    """(dead model, team model, log transition matrix, feature names) from these IDSSE matches."""
+def fit(matches, rng, fill=False, team_extra=None):
+    """(dead model, team model, log transition matrix, feature names) from these IDSSE matches.
+
+    team_extra: (X, labels) added to the team model only, adding up to SC_WEIGHT of IDSSE's weight.
+    """
     rows_X, y_dead, y_home, train_labels = [], [], [], []
     names = None
     for match in matches:
@@ -101,7 +106,16 @@ def fit(matches, rng, fill=False):
     del rows_X
     dead = lgb.train(LGB_PARAMS, lgb.Dataset(X, y_dead.astype(int)), N_ROUNDS)
     alive = ~y_dead
-    team = lgb.train(LGB_PARAMS, lgb.Dataset(X[alive], y_home[alive].astype(int)), N_ROUNDS)
+    X_team, y_team, weight = X[alive], y_home[alive], None
+    if team_extra is not None:
+        X_s, labels_s = team_extra
+        extra = labels_s != "D"
+        X_team = np.concatenate([X_team, X_s[extra]])
+        y_team = np.concatenate([y_team, labels_s[extra] == "H"])
+        weight = np.concatenate([np.full(alive.sum(), 1.0 / alive.sum()),
+                                 np.full(extra.sum(), SC_WEIGHT / extra.sum())])
+        weight *= len(weight) / weight.sum()
+    team = lgb.train(LGB_PARAMS, lgb.Dataset(X_team, y_team.astype(int), weight=weight), N_ROUNDS)
     return dead, team, transition_costs(train_labels), names
 
 
@@ -153,7 +167,10 @@ def main():
     LGB_PARAMS["seed"] = args.seed
     rng = np.random.default_rng(args.seed)
     if args.final:
-        dead, team, log_t, _ = fit(idsse.MATCHES, rng, fill=True)
+        from external.skillcorner_training import load_skillcorner
+        rows = [m[:2] for m in load_skillcorner().values()]
+        extra = np.concatenate([x for x, _ in rows]), np.concatenate([y for _, y in rows])
+        dead, team, log_t, _ = fit(idsse.MATCHES, rng, fill=True, team_extra=extra)
         save(dead, team, log_t)
         print("-> " + os.path.relpath(MODEL_DIR, idsse.ROOT))
         return
