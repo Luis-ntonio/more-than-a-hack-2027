@@ -17,8 +17,6 @@ one <match>.npz per match with both halves concatenated:
 """
 import argparse
 import os
-import shutil
-import urllib.request
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -49,15 +47,10 @@ def download(_):
     os.makedirs(DATA_DIR, exist_ok=True)
     for match in MATCHES:
         for kind, prefix in REMOTE.items():
+            from external.download import fetch
             path = raw_path(match, kind)
-            if os.path.isfile(path) and os.path.getsize(path):
-                continue
             name = "{}_DFL-COM-{}_DFL-MAT-{}.xml".format(prefix, COMPETITION[match], match)
-            with urllib.request.urlopen(URL.format(name)) as source, open(path + ".part", "wb") as target:
-                shutil.copyfileobj(source, target, 1 << 20)
-            if not os.path.getsize(path + ".part"):
-                raise SystemExit("empty download: {}".format(name))
-            os.replace(path + ".part", path)
+            fetch(URL.format(name), path)
             print("{} {}: {:.1f} MB".format(match, kind, os.path.getsize(path) / 1e6), flush=True)
 
 

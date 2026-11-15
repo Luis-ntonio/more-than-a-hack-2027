@@ -13,7 +13,6 @@ import collections
 import csv
 import json
 import os
-import urllib.request
 
 import numpy as np
 
@@ -27,19 +26,8 @@ MIN_TRACKING_BYTES = 1000000      # an LFS pointer is a few hundred bytes
 
 
 def fetch(url, path):
-    if os.path.exists(path) and os.path.getsize(path) > 0:
-        return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    request = urllib.request.Request(url, headers={"User-Agent": "research-download"})
-    with urllib.request.urlopen(request) as response, open(path + ".part", "wb") as handle:
-        while True:
-            block = response.read(1 << 20)
-            if not block:
-                break
-            handle.write(block)
-    if os.path.getsize(path + ".part") == 0:
-        raise RuntimeError("empty download: " + url)
-    os.replace(path + ".part", path)
+    from external.download import fetch as checked_fetch
+    checked_fetch(url, path)
 
 
 def match_ids():
