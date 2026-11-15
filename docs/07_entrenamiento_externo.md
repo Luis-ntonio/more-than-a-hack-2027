@@ -213,6 +213,66 @@ docker compose run --rm dev python -m external.team_variables --follow-up
 - La pérdida en SkillCorner es pequeña, aparece en las 6 semillas y no tiene explicación todavía.
 - Las tablas anteriores a esta se midieron con 149 columnas en el modelo de equipo.
 
+**Frente al baseline de la organización.** El algoritmo de `starter/baseline.py` (jugador más cercano,
+`D` sin balón y voto por mayoría) frente al nuestro, en partidos externos que ninguno de los dos ha
+visto. Nuestros modelos se entrenan aquí solo con 5 partidos de IDSSE. El baseline lee el tracking sin
+el relleno del detector, como en el partido. No se compara con los 5 minutos públicos: la aclaración
+del 3 de noviembre lo prohíbe.
+
+```bash
+docker compose run --rm dev python -m external.baseline_compare
+```
+
+| datos | baseline ±50 (el suelo publicado) | mejor ventana del baseline | nuestro modelo |
+|---|---|---|---|
+| IDSSE limpio, 2 partidos | 0,293 | 0,293 (±50) | **0,590** |
+| IDSSE degradado, 3 semillas | 0,192 | 0,192 (±50) | **0,568** |
+| SkillCorner, 20 partidos | 0,251 | 0,251 (±50) | **0,361** |
+
+Las cifras son spellF1. La ventaja es mucho mayor en IDSSE, cuya degradación es simulada, que en
+SkillCorner, que es tracking real de broadcast. Ninguna de las dos cifras predice el margen en el
+partido.
+
+**Smart Tagging como entrada.** Según `OVERVIEW.md`, `Team` es "el equipo que realiza la acción": el que
+tiene el balón en las fases ofensivas, el que defiende en `DEFENDING IN *` y `DEFENSIVE TRANSITION`, y el
+que saca en `SET PIECES`. Ningún dataset externo trae estas etiquetas, así que `external/tags.py` las
+simula a partir de la verdad. Simula fases omitidas e inventadas, equipo equivocado, bordes desplazados,
+fases que abarcan dos posesiones y `N/A` en parte de los saques. El nivel de error se sortea cada 5
+minutos en rangos amplios y aporta 21 columnas. Se puntúa con etiquetas de cuatro calidades. La regla,
+fijada antes: con calidad media, IDSSE gana al menos 0,005 en cada semilla y SkillCorner no baja; con
+etiquetas inútiles, ninguna fuente pierde más de 0,003.
+
+```bash
+docker compose run --rm dev python -m external.tag_experiment
+```
+
+| etiquetas | en el modelo de equipo: SC / IDSSE | en los dos modelos: SC / IDSSE |
+|---|---|---|
+| buenas | +0,081 / +0,062 | +0,104 / +0,076 |
+| medias | +0,029 / +0,015 | +0,038 / +0,022 |
+| malas | +0,003 / −0,001 | +0,006 / −0,000 |
+| inútiles | −0,004 / −0,005 | −0,005 / −0,007 |
+
+- **Primer intento:** las dos variantes cumplen con etiquetas medias, pero con etiquetas inútiles pierden
+  algo más de 0,003.
+- **Segundo intento, con la misma regla:** se añaden tres columnas de fiabilidad, que miden cuánto
+  coincide el equipo de las etiquetas con el equipo más cercano al balón (por parte y en ventanas de
+  5 minutos). Se calculan igual al entrenar y en el partido. En datos sintéticos valen 0,96 con
+  etiquetas buenas y 0,46 con inútiles.
+
+| etiquetas | + fiabilidad, dos modelos: SC / IDSSE | + fiabilidad, solo equipo: SC / IDSSE |
+|---|---|---|
+| buenas | +0,112 / +0,085 | +0,095 / +0,073 |
+| medias | +0,037 / +0,021 | +0,028 / +0,016 |
+| malas | +0,002 / −0,002 | +0,001 / −0,001 |
+| inútiles | −0,007 / −0,005 | −0,004 / −0,003 |
+
+- **Decisión: ninguna adoptada.** La fiabilidad apenas cambia nada. Ninguna variante cumple el límite con
+  etiquetas inútiles, aunque la de solo equipo se queda a 0,001. La repetición del primer intento dio
+  cifras idénticas.
+- La ganancia depende del ruido simulado: no se sabe cuánto se equivoca Metrica, ni se puede medir sin el
+  partido.
+
 ## Balón enriquecido
 
 `enrich/merge.py` rellena los huecos del ATD con las detecciones guardadas, que salieron de los pesos
