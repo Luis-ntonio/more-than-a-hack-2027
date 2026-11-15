@@ -94,8 +94,18 @@ def drop_short_runs(accepted, p):
     return accepted
 
 
-def fill_gap(cands, anchor, p):
-    return drop_short_runs(track_gap(cands, anchor, 0, p), p)
+def fill_gap(cands, anchor, p, end_anchor=None):
+    """Accepted positions in one gap. With p["backward"] and an anchor after the gap, the tracker
+    also runs backwards from it, and each frame keeps the pass whose anchor is nearer in time."""
+    forward = drop_short_runs(track_gap(cands, anchor, 0, p), p)
+    if not p.get("backward") or end_anchor is None:
+        return forward
+    backward = drop_short_runs(track_gap(cands[::-1], end_anchor, 0, p), p)[::-1]
+    n = len(cands)
+    i = np.arange(n)
+    from_start = i + 1 if anchor is not None else np.full(n, np.inf)
+    use_back = np.isfinite(backward[:, 2]) & (~np.isfinite(forward[:, 2]) | (n - i < from_start))
+    return np.where(use_back[:, None], backward, forward)
 
 
 def interpolate_holes(ball, source, p):

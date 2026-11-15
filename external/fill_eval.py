@@ -69,12 +69,14 @@ def detect(args):
     np.savez_compressed(PATH, **out)
 
 
-def fill_windows(z, match, p, control=False, interp=False):
+def fill_windows(z, match, p, control=False, interp=False, both_ends=False):
     """Per frame of every window: filled flag and distance to the truth, plus the last frame's.
 
     control feeds each window the detections of the next one, which have nothing to do with its
     ball: what still counts as right then comes from the anchor, not from the detector.
     interp also fills short holes as merge does, from the anchor onwards.
+    both_ends treats the second event as the ATD position after the gap, as merge sees one: the
+    window stops a frame before it, and it anchors the backward pass and the interpolation.
     """
     ball = ball_of(match)
     frames = z[match + "_frames"]
@@ -88,18 +90,21 @@ def fill_windows(z, match, p, control=False, interp=False):
     filled, dist, end_filled, end_dist, errors = [], [], [], [], []
     pairs = z[match + "_pairs"].tolist()
     for i, (a, b) in enumerate(pairs):
-        rows = [lookup[f] for f in range(a + 1, b + 1)]
+        last = b - 1 if both_ends else b
+        rows = [lookup[f] for f in range(a + 1, last + 1)]
         if control:
             c, e = pairs[(i + 1) % len(pairs)]
             other = [lookup[f] for f in range(c + 1, e + 1)]
             rows = [other[j % len(other)] for j in range(len(rows))]
-        acc = fill_gap(cands[rows], ball[a - 1], p)
+        acc = fill_gap(cands[rows], ball[a - 1], p, ball[b - 1] if both_ends else None)
         if interp:
-            track = np.vstack([ball[a - 1], acc[:, :2]])
+            ends = [ball[a - 1], acc[:, :2]] + ([ball[b - 1][None]] if both_ends else [])
+            track = np.vstack(ends)
             track, _ = interpolate_holes(track, np.zeros(len(track), dtype=np.int8), p)
-            acc[:, :2] = track[1:]
-            acc[:, 2] = np.where(np.isfinite(track[1:, 0]), 1.0, np.nan)
-        t = np.linspace(0, 1, b - a + 1)[1:, None]
+            inner = track[1:len(acc) + 1]
+            acc[:, :2] = inner
+            acc[:, 2] = np.where(np.isfinite(inner[:, 0]), 1.0, np.nan)
+        t = np.linspace(0, 1, b - a + 1)[1:last - a + 1, None]
         truth = ball[a - 1] + t * (ball[b - 1] - ball[a - 1])
         hit = np.isfinite(acc[:, 2])
         d = np.hypot(acc[:, 0] - truth[:, 0], acc[:, 1] - truth[:, 1])
@@ -151,13 +156,42 @@ def params(args):
             str(override or "merge"), filled.mean(), ok5.sum() / max(filled.sum(), 1), ok5.mean()))
 
 
+def backward(args):
+    """Tracking from both ends of the gap against merge's forward-only pass.
+
+    Both see the gap as merge does, with an ATD position after it (both_ends) and interpolation.
+    The control run feeds each window another window's detections: what the second anchor adds
+    there comes from the anchor alone. Rule, set before seeing any result: adopt if well filled
+    frames (ok5|all) rise, precision (ok5|fill) falls by at most 1 point, and the rise is larger
+    with the real detections than in the control.
+    """
+    z = np.load(PATH)
+    rows = {}
+    print("{:<14} {:<8} {:>8} {:>9} {:>9}".format("pass", "dets", "filled", "ok5|fill", "ok5|all"))
+    for name, override in (("forward", {}), ("both ends", {"backward": True})):
+        for control in (False, True):
+            parts = [fill_windows(z, m, {**PARAMS, **override}, control=control, interp=True, both_ends=True)
+                     for m in st.MATCHES]
+            filled = np.concatenate([x[0] for x in parts])
+            dist = np.concatenate([x[1] for x in parts])
+            ok5 = filled & (dist < 5)
+            rows[name, control] = (filled.mean(), ok5.sum() / max(filled.sum(), 1), ok5.mean())
+            print("{:<14} {:<8} {:>8.1%} {:>9.1%} {:>9.1%}".format(
+                name, "control" if control else "real", *rows[name, control]))
+    gain = rows["both ends", False][2] - rows["forward", False][2]
+    control_gain = rows["both ends", True][2] - rows["forward", True][2]
+    precision = rows["both ends", False][1] - rows["forward", False][1]
+    ok = gain > 0 and precision >= -0.01 and gain > control_gain
+    print("ok5|all gain {:+.1%} (control {:+.1%}), precision {:+.1%}: adopt {}".format(gain, control_gain, precision, ok))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("step", choices=["detect", "sweep", "params"])
+    parser.add_argument("step", choices=["detect", "sweep", "params", "backward"])
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--margin-m", type=float, default=2.0)
     args = parser.parse_args()
-    {"detect": detect, "sweep": sweep, "params": params}[args.step](args)
+    {"detect": detect, "sweep": sweep, "params": params, "backward": backward}[args.step](args)
 
 
 if __name__ == "__main__":

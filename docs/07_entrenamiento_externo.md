@@ -334,6 +334,20 @@ balón tras el primer evento y se rellena con el tracker de `merge`.
   - `interp_max` 10 también lo cumple (8,5 %, 88,2 %), pero se queda en 5: entre eventos la verdad es una
     recta, y eso favorece a la interpolación por construcción.
   - `anchor_s` y `max_speed_ms` no cambian ese 7,0 %, así que se quedan igual.
+- **Seguimiento desde los dos extremos del hueco (`fill_eval backward`): no se adopta.** El tracker
+  corre también hacia atrás desde la posición del ATD posterior al hueco, y cada frame se queda con la
+  pasada de ancla más cercana. Regla fijada antes: suben los frames bien rellenados, la precisión no
+  baja más de 1 punto y la subida supera a la del control.
+
+  | pasada | detecciones | rellenados | a < 5 m, de lo rellenado | a < 5 m, del total |
+  |---|---|---|---|---|
+  | solo hacia delante | reales | 10,5 % | 88,5 % | 9,3 % |
+  | desde los dos extremos | reales | 11,1 % | 85,0 % | 9,4 % |
+  | solo hacia delante | control | 5,6 % | 5,1 % | 0,3 % |
+  | desde los dos extremos | control | 9,4 % | 4,0 % | 0,4 % |
+
+  Gana 0,1 puntos, lo mismo que en el control, y pierde 3,6 de precisión. La opción queda en
+  `fill_gap` (`backward`), apagada.
 - Entre eventos la verdad es una recta, así que solo se usa la cifra a 5 m. Son ventanas sin elegir por
   dificultad, y los valores ordenan ajustes, no se trasladan al partido.
 
