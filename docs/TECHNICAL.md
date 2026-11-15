@@ -13,6 +13,12 @@ input, to produce the submission. We made this choice after the organisers' clar
 3 November 2026: no number measured on the provided match, its video or its public ground truth sets
 any parameter of the pipeline, and no hand labels are used anywhere.
 
+The git history before commit `0f50008` (6 November 2026) shows an earlier approach, built before
+that clarification: it tuned and validated its parameters against hand labels of the match and the
+public 5 minutes. It was
+removed entirely, and none of its code, parameters or results feed the submission. The hand labels
+were never committed to this repository.
+
 ## 2. Pipeline
 
 ```
