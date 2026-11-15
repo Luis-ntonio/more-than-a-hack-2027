@@ -181,6 +181,38 @@ docker compose run --rm dev python -m external.skillcorner_weight
 - No se sabe cuál de las dos fuentes se parece más al partido, y no se puede medir sin usarlo. La mejora
   es una apuesta razonable, no una garantía.
 
+**Variables nuevas para el modelo de equipo.** Tres grupos en `external/features.py`: continuidad (balance
+de toques y tiempo reteniéndolos), ataque (velocidad del balón y del bloque de jugadores hacia la portería
+rival) y forma (área de cada equipo y jugadores detrás del balón). El modelo de muerto o vivo no cambia.
+La regla se fijó antes: no bajar de media en ninguna fuente, suma de ganancias positiva en cada semilla y
+de al menos 0,005 de media.
+
+```bash
+docker compose run --rm dev python -m external.team_variables
+docker compose run --rm dev python -m external.team_variables --follow-up
+```
+
+| columnas añadidas | semillas | SkillCorner spellF1, diferencia | IDSSE spellF1, diferencia | ¿pasa? |
+|---|---|---|---|---|
+| continuidad (24) | 0–2 | +0,000 | +0,001 | no |
+| forma (20) | 0–2 | −0,003 | +0,011 | no |
+| ataque (20) | 0–2 | −0,004 | +0,036 | no |
+| todas (64) | 0–2 | −0,006 | +0,048 | no |
+| solo balón (10) | 3–5 | −0,004 | +0,015 | no |
+| solo bloque (10) | 3–5 | −0,004 | +0,032 | no |
+| ataque (20) | 3–5 | −0,005 | +0,040 | no |
+
+- **Decisión: se adoptan las 20 columnas de ataque, solo en el modelo de equipo (169 columnas).** Ninguna
+  variante pasó la regla fijada antes. Se adopta por decisión expresa, después de ver los resultados: gana
+  unas 8–10 veces lo que cuesta. El modelo de muerto o vivo sigue con 149, y su archivo no cambia.
+- Las semillas 3–5 usan pares retenidos nuevos. La ganancia de ataque en IDSSE se repite con ellos.
+- La hipótesis de que la pérdida en SkillCorner venía del bloque, porque solo se ven los jugadores en
+  cámara, queda descartada: el balón solo pierde lo mismo.
+- La regla exige no perder nada en ninguna fuente, más estricta que la del peso de SkillCorner, que admitía
+  perder 0,010. Con esa tolerancia, ataque pasaría.
+- La pérdida en SkillCorner es pequeña, aparece en las 6 semillas y no tiene explicación todavía.
+- Las tablas anteriores a esta se midieron con 149 columnas en el modelo de equipo.
+
 ## Balón enriquecido
 
 `enrich/merge.py` rellena los huecos del ATD con las detecciones guardadas, que salieron de los pesos
@@ -232,14 +264,14 @@ Las cifras son spellF1, con desviación de 0,02–0,04. Rellenar ayuda, entrenar
 y no se pierde nada donde no hay relleno. La ganancia depende de los rangos supuestos y viene de una sola
 semilla de entrenamiento. La decisión no usa ninguna cifra del partido.
 
-`evaluation/results/external.csv` usa ya el balón enriquecido y el modelo final con SkillCorner: formato
-válido, 2 ejecuciones completas idénticas, SHA-256
-`fd7620d6983295f66f3e9c458883228390fe0d45bef24bcfac62a4ad4436837c`.
+`evaluation/results/external.csv` usa ya el balón enriquecido y el modelo final con SkillCorner y las
+columnas de ataque: formato válido, 2 ejecuciones completas idénticas, SHA-256
+`7d52e2acdc3ede04a49c6294800feba511fa0a5adfb7907e4a2b8b87db85f75f`.
 
 ## Pendiente
 
 1. **Balón enriquecido:** falta medir cuánto rellena una cámara táctica; solo se puede acotar con datos externos.
-2. **Equipo con balón:** sigue siendo lo más débil, aun con SkillCorner en el entrenamiento.
+2. **Equipo con balón:** sigue siendo lo más débil, y falta explicar la pequeña pérdida en SkillCorner.
 3. **Repo público:** el historial de git se conserva y contiene lo retirado.
 4. **Consulta a la organización:** si las estadísticas agregadas del partido que ve un asistente de IA
    cuentan como "subir datos".

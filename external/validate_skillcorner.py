@@ -18,8 +18,8 @@ import os
 import numpy as np
 
 from external import skillcorner as sc
-from external.features import FPS, compute
-from external.train import decode, load, nearest_team, score
+from external.features import FPS, compute_final
+from external.train import decode, load, nearest_team, predict_both, score
 
 SOURCE_FPS = 10
 
@@ -72,8 +72,8 @@ def main():
             v, truth = view_of(d, variant)
             has = v.pop("has")
             view = dict(v, team=d["team"], pitch=tuple(d["pitch"].tolist()))
-            X, names = compute(view)
-            p_dead, p_home = dead.predict(X), team.predict(X)
+            X, names = compute_final(view)
+            p_dead, p_home = predict_both(dead, team, X)
             preds = {"nearest": np.where(p_dead >= 0.5, "D", nearest_team(X, names)),
                      "frame by frame": np.where(p_dead >= 0.5, "D", np.where(p_home >= 0.5, "H", "A")),
                      "HMM": decode(p_dead, p_home, view["half"], log_t)}

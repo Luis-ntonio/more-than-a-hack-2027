@@ -13,8 +13,8 @@ import numpy as np
 
 from external import idsse, skillcorner as sc
 from external.degrade import degrade
-from external.features import compute
-from external.train import VAL_MATCHES, decode, fit, score, view_of
+from external.features import compute_final
+from external.train import VAL_MATCHES, decode, fit, predict_both, score, view_of
 from external.validate_skillcorner import view_of as sc_view
 
 EVAL_SEEDS = (1, 2, 3)
@@ -28,8 +28,8 @@ def on_idsse(model, fill):
         truth = idsse.to_labels(d)
         for seed in EVAL_SEEDS:
             view = degrade(view_of(d), d["ball"][:, 2], np.random.default_rng(seed), fill=fill)
-            X, _ = compute(view)
-            rows.append(score(truth, decode(dead.predict(X), team.predict(X), d["half"], log_t)))
+            X, _ = compute_final(view)
+            rows.append(score(truth, decode(*predict_both(dead, team, X), d["half"], log_t)))
     return np.mean(rows, axis=0), np.std([r[0] for r in rows])
 
 
@@ -40,8 +40,8 @@ def on_skillcorner(model):
         d = np.load(os.path.join(sc.DATA_DIR, match + ".npz"))
         v, truth = sc_view(d, "detected")
         v.pop("has")
-        X, _ = compute(dict(v, team=d["team"], pitch=tuple(d["pitch"].tolist())))
-        rows.append(score(truth, decode(dead.predict(X), team.predict(X), v["half"], log_t)))
+        X, _ = compute_final(dict(v, team=d["team"], pitch=tuple(d["pitch"].tolist())))
+        rows.append(score(truth, decode(*predict_both(dead, team, X), v["half"], log_t)))
     return np.mean(rows, axis=0), np.std([r[0] for r in rows])
 
 

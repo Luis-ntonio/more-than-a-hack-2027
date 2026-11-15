@@ -19,6 +19,10 @@ TOUCH_M = 1.5     # about a stride: a player this close can play the ball
 CAP_M = 40.0
 CAP_S = 30.0
 MAX_BALL_MS = 40.0
+MAX_PLAYER_MS = 12.0
+TOUCH_WIDE_M = 3.0   # with a noisy ball, a touch may only show up this far from the player
+SLOW_WINDOWS_S = (2.0, 5.0, 10.0)
+FAST_WINDOWS_S = (1.0, 2.0, 5.0)
 
 
 def rolling_mean(values, half):
@@ -67,6 +71,16 @@ def last_next(team_at):
             np.where(last >= 0, np.minimum((frames - last) / FPS, CAP_S), CAP_S),
             np.where(nxt < n, team_at[np.minimum(nxt, n - 1)], 0.0),
             np.where(nxt < n, np.minimum((nxt - frames) / FPS, CAP_S), CAP_S))
+
+
+def add_windows(cols, name, seconds):
+    """Means of a column around, before and after each frame."""
+    for w in seconds:
+        half = int(w * FPS)
+        mean = rolling_mean(cols[name], half)
+        cols["{}_m{}".format(name, w)] = mean
+        cols["{}_past{}".format(name, w)] = np.concatenate([np.full(half, np.nan), mean[:-half]])
+        cols["{}_next{}".format(name, w)] = np.concatenate([mean[half:], np.full(half, np.nan)])
 
 
 def compute(view):
@@ -126,14 +140,79 @@ def compute(view):
 
     for name in ("visible", "d_diff", "d_min", "near_diff_3.0", "near_sum_3.0", "ball_speed",
                  "ball_x", "edge_m", "pace", "cx_diff"):
-        for w in WINDOWS_S:
-            half = int(w * FPS)
-            mean = rolling_mean(cols[name], half)
-            cols["{}_m{}".format(name, w)] = mean
-            cols["{}_past{}".format(name, w)] = np.concatenate([np.full(half, np.nan), mean[:-half]])
-            cols["{}_next{}".format(name, w)] = np.concatenate([mean[half:], np.full(half, np.nan)])
+        add_windows(cols, name, WINDOWS_S)
     names = list(cols)
     return np.column_stack([cols[k] for k in names]).astype(np.float32), names
+
+
+def continuity_columns(d_home, d_away):
+    """Who has been touching the ball: balance of touches, and how long one team has kept them."""
+    cols = {}
+    d_min = np.fmin(d_home, d_away)
+    for label, radius in (("tight", TOUCH_M), ("wide", TOUCH_WIDE_M)):
+        touch = np.where(d_min < radius, np.where(d_home <= d_away, 1.0, -1.0), 0.0)
+        cols["touches_" + label] = touch
+        add_windows(cols, "touches_" + label, SLOW_WINDOWS_S)
+        del cols["touches_" + label]
+        holder = last_next(touch)[0]
+        home, away = run_info(holder > 0), run_info(holder < 0)
+        for i, part in enumerate(("since", "until", "len")):
+            cols["hold_{}_{}".format(label, part)] = home[i] - away[i]
+    return cols
+
+
+def attack_columns(view, sign):
+    """Which way play is going, towards the goal home attacks: the ball, and the players as a block."""
+    cols = {}
+    ball = view["ball"]
+    step = np.diff(ball[:, 0], prepend=ball[:1, 0]) * FPS * sign
+    cols["ball_vx"] = np.where(np.abs(step) < MAX_BALL_MS, step, np.nan)
+    x = view["players"][:, :, 0]
+    step = np.diff(x, axis=0, prepend=x[:1]) * FPS * sign[:, None]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        cols["block_vx"] = np.nanmean(np.where(np.abs(step) < MAX_PLAYER_MS, step, np.nan), axis=1)
+    for name in ("ball_vx", "block_vx"):
+        add_windows(cols, name, FAST_WINDOWS_S)
+    return cols
+
+
+def shape_columns(view, sign):
+    """A team with the ball spreads out, and the other one gets behind the ball."""
+    players, team = view["players"], view["team"]
+    x, y = players[:, :, 0] * sign[:, None], players[:, :, 1]
+    bx = view["ball"][:, 0] * sign
+    home = team == 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        area = {t: np.nanstd(x[:, m], axis=1) * np.nanstd(y[:, m], axis=1) for t, m in ((0, home), (1, ~home))}
+    seen = np.isfinite(x)
+    behind_home = (x[:, home] < bx[:, None]).sum(axis=1) / np.maximum(seen[:, home].sum(axis=1), 1)
+    behind_away = (x[:, ~home] > bx[:, None]).sum(axis=1) / np.maximum(seen[:, ~home].sum(axis=1), 1)
+    cols = {"area_diff": area[0] - area[1],
+            "behind_diff": np.where(np.isfinite(bx), behind_home - behind_away, np.nan)}
+    for name in ("area_diff", "behind_diff"):
+        add_windows(cols, name, FAST_WINDOWS_S)
+    return cols
+
+
+def compute_final(view):
+    """What the final models read: compute()'s columns, then the attack ones, for the team model only."""
+    X, names = compute(view)
+    cols = attack_columns(view, attack_sign(view))
+    return np.column_stack([X] + list(cols.values())).astype(np.float32), names + list(cols)
+
+
+def compute_team(view):
+    """compute() plus the candidate columns for the team model, and {group: its column names}."""
+    X, names = compute(view)
+    sign = attack_sign(view)
+    groups = {"continuity": continuity_columns(X[:, names.index("d_home")].astype(np.float64),
+                                               X[:, names.index("d_away")].astype(np.float64)),
+              "attack": attack_columns(view, sign), "shape": shape_columns(view, sign)}
+    extra = [c for cols in groups.values() for c in cols.values()]
+    return (np.column_stack([X] + extra).astype(np.float32), names + [k for cols in groups.values() for k in cols],
+            {g: list(cols) for g, cols in groups.items()})
 
 
 def swap_teams(view):

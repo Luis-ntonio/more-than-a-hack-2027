@@ -26,29 +26,29 @@ FOLDS = 4
 EVAL_SEEDS = (1, 2, 3)
 
 
-def training_rows(view, labels, keep):
+def training_rows(view, labels, keep, features=compute):
     """Strided rows of a view and of the same view with the teams swapped."""
     out = []
     for v, lab in ((view, labels), (swap_teams(view), swap_labels(labels))):
-        X, _ = compute(v)
+        X = features(v)[0]
         out.append((X[keep][::STRIDE].astype(np.float32), lab[keep][::STRIDE]))
     return (np.concatenate([x for x, _ in out]), np.concatenate([y for _, y in out]))
 
 
-def load_idsse_training(rng, held=VAL_MATCHES):
+def load_idsse_training(rng, held=VAL_MATCHES, features=compute):
     rows, labels = [], []
     for match in [m for m in idsse.MATCHES if m not in held]:
         d = idsse.load(match)
         truth = idsse.to_labels(d)
         labels.append(truth)
         view = degrade(view_of(d), d["ball"][:, 2], rng, fill=True)
-        rows.append(training_rows(view, truth, np.ones(len(truth), dtype=bool)))
+        rows.append(training_rows(view, truth, np.ones(len(truth), dtype=bool), features))
         print("idsse", match, flush=True)
     return (np.concatenate([x for x, _ in rows]), np.concatenate([y for _, y in rows]),
             transition_costs(labels))
 
 
-def load_skillcorner():
+def load_skillcorner(features=compute):
     """{match: (training X, training y, full X, truth, has, half)}."""
     out = {}
     for match in sc.match_ids():
@@ -56,20 +56,20 @@ def load_skillcorner():
         v, truth = sc_view(d, "detected")
         has = v.pop("has")
         view = dict(v, team=d["team"], pitch=tuple(d["pitch"].tolist()))
-        X, _ = compute(view)
-        out[match] = training_rows(view, truth, has) + (X.astype(np.float32), truth, has, v["half"])
+        X = features(view)[0]
+        out[match] = training_rows(view, truth, has, features) + (X.astype(np.float32), truth, has, v["half"])
         print("skillcorner", match, flush=True)
     return out
 
 
-def load_idsse_eval(held=VAL_MATCHES):
+def load_idsse_eval(held=VAL_MATCHES, features=compute):
     out = []
     for match in held:
         d = idsse.load(match)
         truth = idsse.to_labels(d)
         for seed in EVAL_SEEDS:
             view = degrade(view_of(d), d["ball"][:, 2], np.random.default_rng(seed), fill=True)
-            out.append((compute(view)[0].astype(np.float32), truth, d["half"]))
+            out.append((features(view)[0].astype(np.float32), truth, d["half"]))
     return out
 
 

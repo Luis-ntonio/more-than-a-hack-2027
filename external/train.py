@@ -3,7 +3,8 @@
     docker compose run --rm dev python -m external.train            # 5 matches, score on the other 2
     docker compose run --rm dev python -m external.train --final    # all 7, saved for external.predict
 
-Two LightGBM models on the features of external/features.py -- dead / alive, then home / away on
+Two LightGBM models on the features of external/features.py -- dead / alive, then home / away, with
+the attack columns (external.team_variables), on
 alive frames -- trained on degraded IDSSE matches with a simulated detector fill of part of the lost
 ball (external.fill_experiment shows why), both ways round (teams swapped), then a 3-state
 HMM whose transition costs come from the training labels. Scored with the official metrics on
@@ -20,7 +21,7 @@ import numpy as np
 
 from external import idsse
 from external.degrade import degrade
-from external.features import compute, swap_teams
+from external.features import compute_final, swap_teams
 from possession.decode import viterbi
 
 sys.path.insert(0, os.path.join(idsse.ROOT, "evaluation"))
@@ -83,6 +84,11 @@ def score(truth, pred):
     return r["spell_f1_mean"], r["macro_f1"], spells
 
 
+def predict_both(dead, team, X):
+    """(p_dead, p_home) from compute_final's columns; the dead model reads only the first ones."""
+    return dead.predict(X[:, :dead.num_feature()]), team.predict(X)
+
+
 def fit(matches, rng, fill=False, team_extra=None):
     """(dead model, team model, log transition matrix, feature names) from these IDSSE matches.
 
@@ -96,7 +102,7 @@ def fit(matches, rng, fill=False, team_extra=None):
         train_labels.append(labels)
         view = degrade(view_of(d), d["ball"][:, 2], rng, fill=fill)
         for v, lab in ((view, labels), (swap_teams(view), swap_labels(labels))):
-            X, names = compute(v)
+            X, names = compute_final(v)
             rows_X.append(X[::STRIDE])
             y_dead.append(lab[::STRIDE] == "D")
             y_home.append(lab[::STRIDE] == "H")
@@ -104,7 +110,9 @@ def fit(matches, rng, fill=False, team_extra=None):
     X = np.concatenate(rows_X)
     y_dead, y_home = np.concatenate(y_dead), np.concatenate(y_home)
     del rows_X
-    dead = lgb.train(LGB_PARAMS, lgb.Dataset(X, y_dead.astype(int)), N_ROUNDS)
+    dead_X = np.ascontiguousarray(X[:, :names.index("ball_vx")])
+    dead = lgb.train(LGB_PARAMS, lgb.Dataset(dead_X, y_dead.astype(int)), N_ROUNDS)
+    del dead_X
     alive = ~y_dead
     X_team, y_team, weight = X[alive], y_home[alive], None
     if team_extra is not None:
@@ -143,8 +151,8 @@ def validate(dead, team, log_t, names):
         base = view_of(d)
         for name, view in (("clean", base),
                            ("degraded", degrade(base, d["ball"][:, 2], np.random.default_rng(1)))):
-            Xv, _ = compute(view)
-            pd_, ph = dead.predict(Xv), team.predict(Xv)
+            Xv, _ = compute_final(view)
+            pd_, ph = predict_both(dead, team, Xv)
             frame = np.where(pd_ >= 0.5, "D", np.where(ph >= 0.5, "H", "A"))
             nearest = np.where(pd_ >= 0.5, "D", nearest_team(Xv, names))
             for label, pred in (("nearest + model's D", nearest), ("frame by frame", frame),
@@ -168,7 +176,7 @@ def main():
     rng = np.random.default_rng(args.seed)
     if args.final:
         from external.skillcorner_training import load_skillcorner
-        rows = [m[:2] for m in load_skillcorner().values()]
+        rows = [m[:2] for m in load_skillcorner(compute_final).values()]
         extra = np.concatenate([x for x, _ in rows]), np.concatenate([y for _, y in rows])
         dead, team, log_t, _ = fit(idsse.MATCHES, rng, fill=True, team_extra=extra)
         save(dead, team, log_t)

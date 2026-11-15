@@ -15,8 +15,8 @@ import os
 import numpy as np
 
 from enrich.merge import SOURCE_DETECTOR
-from external.features import compute
-from external.train import decode, load
+from external.features import compute_final
+from external.train import decode, load, predict_both
 from possession.io import GAME, GAMES, PITCH, ROOT, graded_blocks, kickoff_frames, load_atd
 
 OUT = os.path.join(ROOT, "evaluation", "results", "external.csv")
@@ -41,8 +41,8 @@ def main():
     for half, first, last in graded_blocks():
         start = max(first, kickoffs[half])   # decode from the kickoff on
         view = match_view(start, last, half)
-        X, _ = compute(view)
-        labels[start:last + 1] = decode(dead.predict(X), team.predict(X), view["half"], log_t)
+        X, _ = compute_final(view)
+        labels[start:last + 1] = decode(*predict_both(dead, team, X), view["half"], log_t)
         labels[first:start] = "D"
     with open(OUT, "w", newline="\n") as handle:
         handle.write("frame,label\n")
