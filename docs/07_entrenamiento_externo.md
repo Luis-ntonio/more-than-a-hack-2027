@@ -18,6 +18,7 @@ docker compose run --rm dev python -m external.idsse download   # 7 partidos, ~2
 docker compose run --rm dev python -m external.idsse parse
 docker compose run --rm dev python -m external.skillcorner download
 docker compose run --rm dev python -m external.skillcorner parse
+# las descargas se comprueban contra external/downloads.sha256
 docker compose run --rm dev python -m external.train            # 5 partidos, valida en 2
 docker compose run --rm dev python -m enrich.merge              # balón enriquecido
 docker compose run --rm dev python -m external.train --final    # 7 partidos + SkillCorner en el de equipo
@@ -272,6 +273,32 @@ docker compose run --rm dev python -m external.tag_experiment
   cifras idénticas.
 - La ganancia depende del ruido simulado: no se sabe cuánto se equivoca Metrica, ni se puede medir sin el
   partido.
+
+**Duraciones de las posesiones (semi-Markov).** `external/durations.py` divide cada estado en k etapas,
+así que su duración sigue una binomial negativa. k y la probabilidad de salida se ajustan por máxima
+verosimilitud con las posesiones de IDSSE de entrenamiento; k = 1 es el HMM actual. Solo cambia el
+decodificador, sobre los mismos modelos. La regla, fijada antes: IDSSE gana al menos 0,005 de media y
+en cada semilla, y SkillCorner no baja.
+
+```bash
+docker compose run --rm dev python -m external.duration_experiment
+```
+
+- **Decisión: no se adopta.** El ajuste elige 1 etapa para `H` y `A` en las 3 semillas, o sea, el mismo
+  HMM. Diferencia media: +0,001 en SkillCorner y +0,001 en IDSSE.
+- La duración real de las posesiones ya se parece a una geométrica: el 30 % dura menos de 2 s.
+
+## Regeneración desde un clon limpio
+
+La entrega se regenera bit a bit desde cero: clon de la rama, descarga de IDSSE y SkillCorner, `merge`,
+`train --final` y `predict`. Da `7d52e2acdc3ede04a49c6294800feba511fa0a5adfb7907e4a2b8b87db85f75f` y
+los artefactos coinciden con `enrich/artefacts.sha256`.
+
+- El clon solo recibe el partido en `data/` y las detecciones de balón fijadas en `cache/enriched/`. El
+  detector no se vuelve a pasar (ver `enrich/README.md`).
+- El primer intento falló: un archivo de tracking de SkillCorner llegó a medias sin ningún error.
+  Desde entonces `external/download.py` comprueba el tamaño anunciado y el SHA-256 de cada uno de los 102
+  archivos externos, fijados en `external/downloads.sha256`, y reintenta hasta 3 veces.
 
 ## Balón enriquecido
 
